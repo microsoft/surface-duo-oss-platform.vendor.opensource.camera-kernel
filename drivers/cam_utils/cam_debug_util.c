@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2020, The Linux Foundataion. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundataion. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/io.h>
@@ -91,13 +98,8 @@ const char *cam_get_module_name(unsigned int module_id)
 	case CAM_REQ:
 		name = "CAM-REQ";
 		break;
-	case CAM_CUSTOM:
-		name = "CAM-CUSTOM";
-	case CAM_OPE:
-		name = "CAM-OPE";
-		break;
-	case CAM_PRESIL:
-		name = "CAM-PRESIL";
+	case CAM_IR_LED:
+		name = "CAM-IR-LED";
 		break;
 	default:
 		name = "CAM";
@@ -120,7 +122,6 @@ void cam_debug_log(unsigned int module_id, const char *func, const int line,
 		pr_info("CAM_DBG: %s: %s: %d: %s\n",
 			cam_get_module_name(module_id),
 			func, line, str_buffer);
+		va_end(args);
 	}
-
-	va_end(args);
 }

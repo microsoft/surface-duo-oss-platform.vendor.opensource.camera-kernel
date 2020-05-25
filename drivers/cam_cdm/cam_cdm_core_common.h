@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _CAM_CDM_CORE_COMMON_H_
@@ -8,19 +15,8 @@
 
 #include "cam_mem_mgr.h"
 
-#define CAM_CDM100_VERSION 0x10000000
-#define CAM_CDM110_VERSION 0x10010000
-#define CAM_CDM120_VERSION 0x10020000
-#define CAM_CDM200_VERSION 0x20000000
-
-#define CAM_CDM_AHB_BURST_LEN_1  (BIT(1) - 1)
-#define CAM_CDM_AHB_BURST_LEN_4  (BIT(2) - 1)
-#define CAM_CDM_AHB_BURST_LEN_8  (BIT(3) - 1)
-#define CAM_CDM_AHB_BURST_LEN_16 (BIT(4) - 1)
-#define CAM_CDM_AHB_BURST_EN      BIT(4)
-#define CAM_CDM_AHB_STOP_ON_ERROR BIT(8)
-#define CAM_CDM_ARB_SEL_RR        BIT(16)
-#define CAM_CDM_IMPLICIT_WAIT_EN  BIT(17)
+#define CAM_CDM170_VERSION 0x10000000
+#define CAM_CDM175_VERSION 0x10010000
 
 extern struct cam_cdm_utils_ops CDM170_ops;
 
@@ -47,9 +43,6 @@ int cam_virtual_cdm_submit_bl(struct cam_hw_info *cdm_hw,
 int cam_hw_cdm_submit_bl(struct cam_hw_info *cdm_hw,
 	struct cam_cdm_hw_intf_cmd_submit_bl *req,
 	struct cam_cdm_client *client);
-int cam_hw_cdm_reset_hw(struct cam_hw_info *cdm_hw, uint32_t handle);
-int cam_hw_cdm_flush_hw(struct cam_hw_info *cdm_hw, uint32_t handle);
-int cam_hw_cdm_handle_error(struct cam_hw_info *cdm_hw, uint32_t handle);
 struct cam_cdm_bl_cb_request_entry *cam_cdm_find_request_by_bl_tag(
 	uint32_t tag, struct list_head *bl_list);
 void cam_cdm_notify_clients(struct cam_hw_info *cdm_hw,

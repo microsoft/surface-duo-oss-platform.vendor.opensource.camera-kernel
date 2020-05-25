@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include "cam_sensor_cmn_header.h"
@@ -13,7 +20,7 @@ int32_t cam_cci_i2c_read(struct cam_sensor_cci_client *cci_client,
 	enum camera_sensor_i2c_type data_type)
 {
 	int32_t rc = -EINVAL;
-	unsigned char buf[CAMERA_SENSOR_I2C_TYPE_DWORD];
+	unsigned char buf[data_type];
 	struct cam_cci_ctrl cci_ctrl;
 
 	if (addr_type <= CAMERA_SENSOR_I2C_TYPE_INVALID
@@ -94,14 +101,14 @@ int32_t cam_camera_cci_i2c_read_seq(struct cam_sensor_cci_client *cci_client,
 }
 
 static int32_t cam_cci_i2c_write_table_cmd(
-	struct camera_io_master *client,
+	struct cam_sensor_cci_client *cci_client,
 	struct cam_sensor_i2c_reg_setting *write_setting,
 	enum cam_cci_cmd_type cmd)
 {
 	int32_t rc = -EINVAL;
 	struct cam_cci_ctrl cci_ctrl;
 
-	if (!client || !write_setting)
+	if (!cci_client || !write_setting)
 		return rc;
 
 	if (write_setting->addr_type <= CAMERA_SENSOR_I2C_TYPE_INVALID
@@ -111,13 +118,13 @@ static int32_t cam_cci_i2c_write_table_cmd(
 		return rc;
 
 	cci_ctrl.cmd = cmd;
-	cci_ctrl.cci_info = client->cci_client;
+	cci_ctrl.cci_info = cci_client;
 	cci_ctrl.cfg.cci_i2c_write_cfg.reg_setting =
 		write_setting->reg_setting;
 	cci_ctrl.cfg.cci_i2c_write_cfg.data_type = write_setting->data_type;
 	cci_ctrl.cfg.cci_i2c_write_cfg.addr_type = write_setting->addr_type;
 	cci_ctrl.cfg.cci_i2c_write_cfg.size = write_setting->size;
-	rc = v4l2_subdev_call(client->cci_client->cci_subdev,
+	rc = v4l2_subdev_call(cci_client->cci_subdev,
 		core, ioctl, VIDIOC_MSM_CCI_CFG, &cci_ctrl);
 	if (rc < 0) {
 		CAM_ERR(CAM_SENSOR, "Failed rc = %d", rc);
@@ -135,7 +142,7 @@ static int32_t cam_cci_i2c_write_table_cmd(
 
 
 int32_t cam_cci_i2c_write_table(
-	struct camera_io_master *client,
+	struct cam_sensor_cci_client *client,
 	struct cam_sensor_i2c_reg_setting *write_setting)
 {
 	return cam_cci_i2c_write_table_cmd(client, write_setting,
@@ -143,7 +150,7 @@ int32_t cam_cci_i2c_write_table(
 }
 
 int32_t cam_cci_i2c_write_continuous_table(
-	struct camera_io_master *client,
+	struct cam_sensor_cci_client *client,
 	struct cam_sensor_i2c_reg_setting *write_setting,
 	uint8_t cam_sensor_i2c_write_flag)
 {

@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include "cam_ois_dev.h"
@@ -8,7 +15,6 @@
 #include "cam_ois_soc.h"
 #include "cam_ois_core.h"
 #include "cam_debug_util.h"
-#include "camera_main.h"
 
 static long cam_ois_subdev_ioctl(struct v4l2_subdev *sd,
 	unsigned int cmd, void *arg)
@@ -245,13 +251,12 @@ static int cam_ois_i2c_driver_remove(struct i2c_client *client)
 	return 0;
 }
 
-static int cam_ois_component_bind(struct device *dev,
-	struct device *master_dev, void *data)
+static int32_t cam_ois_platform_driver_probe(
+	struct platform_device *pdev)
 {
 	int32_t                         rc = 0;
 	struct cam_ois_ctrl_t          *o_ctrl = NULL;
 	struct cam_ois_soc_private     *soc_private = NULL;
-	struct platform_device *pdev = to_platform_device(dev);
 
 	o_ctrl = kzalloc(sizeof(struct cam_ois_ctrl_t), GFP_KERNEL);
 	if (!o_ctrl)
@@ -302,7 +307,7 @@ static int cam_ois_component_bind(struct device *dev,
 
 	platform_set_drvdata(pdev, o_ctrl);
 	o_ctrl->cam_ois_state = CAM_OIS_INIT;
-	CAM_DBG(CAM_OIS, "Component bound successfully");
+
 	return rc;
 unreg_subdev:
 	cam_unregister_subdev(&(o_ctrl->v4l2_dev_str));
@@ -315,20 +320,18 @@ free_o_ctrl:
 	return rc;
 }
 
-static void cam_ois_component_unbind(struct device *dev,
-	struct device *master_dev, void *data)
+static int cam_ois_platform_driver_remove(struct platform_device *pdev)
 {
 	int                             i;
 	struct cam_ois_ctrl_t          *o_ctrl;
 	struct cam_ois_soc_private     *soc_private;
 	struct cam_sensor_power_ctrl_t *power_info;
 	struct cam_hw_soc_info         *soc_info;
-	struct platform_device *pdev = to_platform_device(dev);
 
 	o_ctrl = platform_get_drvdata(pdev);
 	if (!o_ctrl) {
 		CAM_ERR(CAM_OIS, "ois device is NULL");
-		return;
+		return -EINVAL;
 	}
 
 	CAM_INFO(CAM_OIS, "platform driver remove invoked");
@@ -350,29 +353,7 @@ static void cam_ois_component_unbind(struct device *dev,
 	platform_set_drvdata(pdev, NULL);
 	v4l2_set_subdevdata(&o_ctrl->v4l2_dev_str.sd, NULL);
 	kfree(o_ctrl);
-}
 
-const static struct component_ops cam_ois_component_ops = {
-	.bind = cam_ois_component_bind,
-	.unbind = cam_ois_component_unbind,
-};
-
-static int32_t cam_ois_platform_driver_probe(
-	struct platform_device *pdev)
-{
-	int rc = 0;
-
-	CAM_DBG(CAM_OIS, "Adding OIS Sensor component");
-	rc = component_add(&pdev->dev, &cam_ois_component_ops);
-	if (rc)
-		CAM_ERR(CAM_OIS, "failed to add component rc: %d", rc);
-
-	return rc;
-}
-
-static int cam_ois_platform_driver_remove(struct platform_device *pdev)
-{
-	component_del(&pdev->dev, &cam_ois_component_ops);
 	return 0;
 }
 
@@ -384,7 +365,7 @@ static const struct of_device_id cam_ois_dt_match[] = {
 
 MODULE_DEVICE_TABLE(of, cam_ois_dt_match);
 
-struct platform_driver cam_ois_platform_driver = {
+static struct platform_driver cam_ois_platform_driver = {
 	.driver = {
 		.name = "qcom,ois",
 		.owner = THIS_MODULE,
@@ -410,7 +391,7 @@ static struct i2c_driver cam_ois_i2c_driver = {
 static struct cam_ois_registered_driver_t registered_driver = {
 	0, 0};
 
-int cam_ois_driver_init(void)
+static int __init cam_ois_driver_init(void)
 {
 	int rc = 0;
 
@@ -433,7 +414,7 @@ int cam_ois_driver_init(void)
 	return rc;
 }
 
-void cam_ois_driver_exit(void)
+static void __exit cam_ois_driver_exit(void)
 {
 	if (registered_driver.platform_driver)
 		platform_driver_unregister(&cam_ois_platform_driver);
@@ -442,5 +423,7 @@ void cam_ois_driver_exit(void)
 		i2c_del_driver(&cam_ois_i2c_driver);
 }
 
+module_init(cam_ois_driver_init);
+module_exit(cam_ois_driver_exit);
 MODULE_DESCRIPTION("CAM OIS driver");
 MODULE_LICENSE("GPL v2");

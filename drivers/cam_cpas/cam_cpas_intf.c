@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/of.h>
@@ -12,12 +19,9 @@
 #include <media/v4l2-subdev.h>
 #include <media/cam_cpas.h>
 #include <media/cam_req_mgr.h>
-#include <dt-bindings/msm/msm-camera.h>
 
 #include "cam_subdev.h"
 #include "cam_cpas_hw_intf.h"
-#include "cam_cpas_soc.h"
-#include "camera_main.h"
 
 #define CAM_CPAS_DEV_NAME    "cam-cpas"
 #define CAM_CPAS_INTF_INITIALIZED() (g_cpas_intf && g_cpas_intf->probe_done)
@@ -46,104 +50,6 @@ struct cam_cpas_intf {
 
 static struct cam_cpas_intf *g_cpas_intf;
 
-const char *cam_cpas_axi_util_path_type_to_string(
-	uint32_t path_data_type)
-{
-	switch (path_data_type) {
-	/* IFE Paths */
-	case CAM_AXI_PATH_DATA_IFE_LINEAR:
-		return "IFE_LINEAR";
-	case CAM_AXI_PATH_DATA_IFE_VID:
-		return "IFE_VID";
-	case CAM_AXI_PATH_DATA_IFE_DISP:
-		return "IFE_DISP";
-	case CAM_AXI_PATH_DATA_IFE_STATS:
-		return "IFE_STATS";
-	case CAM_AXI_PATH_DATA_IFE_RDI0:
-		return "IFE_RDI0";
-	case CAM_AXI_PATH_DATA_IFE_RDI1:
-		return "IFE_RDI1";
-	case CAM_AXI_PATH_DATA_IFE_RDI2:
-		return "IFE_RDI2";
-	case CAM_AXI_PATH_DATA_IFE_RDI3:
-		return "IFE_RDI3";
-	case CAM_AXI_PATH_DATA_IFE_PDAF:
-		return "IFE_PDAF";
-	case CAM_AXI_PATH_DATA_IFE_PIXEL_RAW:
-		return "IFE_PIXEL_RAW";
-
-	/* IPE Paths */
-	case CAM_AXI_PATH_DATA_IPE_RD_IN:
-		return "IPE_RD_IN";
-	case CAM_AXI_PATH_DATA_IPE_RD_REF:
-		return "IPE_RD_REF";
-	case CAM_AXI_PATH_DATA_IPE_WR_VID:
-		return "IPE_WR_VID";
-	case CAM_AXI_PATH_DATA_IPE_WR_DISP:
-		return "IPE_WR_DISP";
-	case CAM_AXI_PATH_DATA_IPE_WR_REF:
-		return "IPE_WR_REF";
-
-	/* OPE Paths */
-	case CAM_AXI_PATH_DATA_OPE_RD_IN:
-		return "OPE_RD_IN";
-	case CAM_AXI_PATH_DATA_OPE_RD_REF:
-		return "OPE_RD_REF";
-	case CAM_AXI_PATH_DATA_OPE_WR_VID:
-		return "OPE_WR_VID";
-	case CAM_AXI_PATH_DATA_OPE_WR_DISP:
-		return "OPE_WR_DISP";
-	case CAM_AXI_PATH_DATA_OPE_WR_REF:
-		return "OPE_WR_REF";
-
-	/* Common Paths */
-	case CAM_AXI_PATH_DATA_ALL:
-		return "DATA_ALL";
-	default:
-		return "IFE_PATH_INVALID";
-	}
-}
-EXPORT_SYMBOL(cam_cpas_axi_util_path_type_to_string);
-
-const char *cam_cpas_axi_util_trans_type_to_string(
-	uint32_t transac_type)
-{
-	switch (transac_type) {
-	case CAM_AXI_TRANSACTION_READ:
-		return "TRANSAC_READ";
-	case CAM_AXI_TRANSACTION_WRITE:
-		return "TRANSAC_WRITE";
-	default:
-		return "TRANSAC_INVALID";
-	}
-}
-EXPORT_SYMBOL(cam_cpas_axi_util_trans_type_to_string);
-
-int cam_cpas_is_feature_supported(uint32_t flag)
-{
-	struct cam_hw_info *cpas_hw = NULL;
-	struct cam_cpas_private_soc *soc_private = NULL;
-	uint32_t feature_mask;
-
-	if (!CAM_CPAS_INTF_INITIALIZED()) {
-		CAM_ERR(CAM_CPAS, "cpas intf not initialized");
-		return -ENODEV;
-	}
-
-	cpas_hw = (struct cam_hw_info *) g_cpas_intf->hw_intf->hw_priv;
-	soc_private =
-		(struct cam_cpas_private_soc *)cpas_hw->soc_info.soc_private;
-	feature_mask = soc_private->feature_mask;
-
-	if (flag >= CAM_CPAS_FUSE_FEATURE_MAX) {
-		CAM_ERR(CAM_CPAS, "Unknown feature flag %x", flag);
-		return -EINVAL;
-	}
-
-	return feature_mask & flag ? 1 : 0;
-}
-EXPORT_SYMBOL(cam_cpas_is_feature_supported);
-
 int cam_cpas_get_cpas_hw_version(uint32_t *hw_version)
 {
 	struct cam_hw_info *cpas_hw = NULL;
@@ -169,6 +75,7 @@ int cam_cpas_get_cpas_hw_version(uint32_t *hw_version)
 
 	return 0;
 }
+
 
 int cam_cpas_get_hw_info(uint32_t *camera_family,
 	struct cam_hw_version *camera_version,
@@ -284,11 +191,6 @@ int cam_cpas_update_axi_vote(uint32_t client_handle,
 		return -ENODEV;
 	}
 
-	if (!axi_vote) {
-		CAM_ERR(CAM_CPAS, "NULL axi vote");
-		return -EINVAL;
-	}
-
 	if (g_cpas_intf->hw_intf->hw_ops.process_cmd) {
 		struct cam_cpas_hw_cmd_axi_vote cmd_axi_vote;
 
@@ -377,11 +279,6 @@ int cam_cpas_start(uint32_t client_handle,
 	if (!CAM_CPAS_INTF_INITIALIZED()) {
 		CAM_ERR(CAM_CPAS, "cpas intf not initialized");
 		return -ENODEV;
-	}
-
-	if (!axi_vote) {
-		CAM_ERR(CAM_CPAS, "NULL axi vote");
-		return -EINVAL;
 	}
 
 	if (g_cpas_intf->hw_intf->hw_ops.start) {
@@ -652,16 +549,14 @@ static int cam_cpas_subdev_register(struct platform_device *pdev)
 	return rc;
 }
 
-static int cam_cpas_dev_component_bind(struct device *dev,
-	struct device *master_dev, void *data)
+static int cam_cpas_dev_probe(struct platform_device *pdev)
 {
 	struct cam_cpas_hw_caps *hw_caps;
 	struct cam_hw_intf *hw_intf;
 	int rc;
-	struct platform_device *pdev = to_platform_device(dev);
 
 	if (g_cpas_intf) {
-		CAM_ERR(CAM_CPAS, "cpas component already binded");
+		CAM_ERR(CAM_CPAS, "cpas dev proble already done");
 		return -EALREADY;
 	}
 
@@ -698,7 +593,7 @@ static int cam_cpas_dev_component_bind(struct device *dev,
 
 	g_cpas_intf->probe_done = true;
 	CAM_DBG(CAM_CPAS,
-		"Component bound successfully %d, %d.%d.%d, %d.%d.%d, 0x%x",
+		"CPAS INTF Probe success %d, %d.%d.%d, %d.%d.%d, 0x%x",
 		hw_caps->camera_family, hw_caps->camera_version.major,
 		hw_caps->camera_version.minor, hw_caps->camera_version.incr,
 		hw_caps->cpas_version.major, hw_caps->cpas_version.minor,
@@ -712,16 +607,15 @@ error_destroy_mem:
 	mutex_destroy(&g_cpas_intf->intf_lock);
 	kfree(g_cpas_intf);
 	g_cpas_intf = NULL;
-	CAM_ERR(CAM_CPAS, "CPAS component bind failed");
+	CAM_ERR(CAM_CPAS, "CPAS probe failed");
 	return rc;
 }
 
-static void cam_cpas_dev_component_unbind(struct device *dev,
-	struct device *master_dev, void *data)
+static int cam_cpas_dev_remove(struct platform_device *dev)
 {
 	if (!CAM_CPAS_INTF_INITIALIZED()) {
 		CAM_ERR(CAM_CPAS, "cpas intf not initialized");
-		return;
+		return -ENODEV;
 	}
 
 	mutex_lock(&g_cpas_intf->intf_lock);
@@ -732,28 +626,7 @@ static void cam_cpas_dev_component_unbind(struct device *dev,
 	mutex_destroy(&g_cpas_intf->intf_lock);
 	kfree(g_cpas_intf);
 	g_cpas_intf = NULL;
-}
 
-const static struct component_ops cam_cpas_dev_component_ops = {
-	.bind = cam_cpas_dev_component_bind,
-	.unbind = cam_cpas_dev_component_unbind,
-};
-
-static int cam_cpas_dev_probe(struct platform_device *pdev)
-{
-	int rc = 0;
-
-	CAM_DBG(CAM_CPAS, "Adding CPAS INTF component");
-	rc = component_add(&pdev->dev, &cam_cpas_dev_component_ops);
-	if (rc)
-		CAM_ERR(CAM_CPAS, "failed to add component rc: %d", rc);
-
-	return rc;
-}
-
-static int cam_cpas_dev_remove(struct platform_device *pdev)
-{
-	component_del(&pdev->dev, &cam_cpas_dev_component_ops);
 	return 0;
 }
 
@@ -762,7 +635,7 @@ static const struct of_device_id cam_cpas_dt_match[] = {
 	{}
 };
 
-struct platform_driver cam_cpas_driver = {
+static struct platform_driver cam_cpas_driver = {
 	.probe = cam_cpas_dev_probe,
 	.remove = cam_cpas_dev_remove,
 	.driver = {
@@ -773,15 +646,17 @@ struct platform_driver cam_cpas_driver = {
 	},
 };
 
-int cam_cpas_dev_init_module(void)
+static int __init cam_cpas_dev_init_module(void)
 {
 	return platform_driver_register(&cam_cpas_driver);
 }
 
-void cam_cpas_dev_exit_module(void)
+static void __exit cam_cpas_dev_exit_module(void)
 {
 	platform_driver_unregister(&cam_cpas_driver);
 }
 
+module_init(cam_cpas_dev_init_module);
+module_exit(cam_cpas_dev_exit_module);
 MODULE_DESCRIPTION("MSM CPAS driver");
 MODULE_LICENSE("GPL v2");

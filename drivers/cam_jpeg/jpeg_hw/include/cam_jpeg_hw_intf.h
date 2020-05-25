@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef CAM_JPEG_HW_INTF_H
@@ -8,6 +15,7 @@
 
 #include "cam_cpas_api.h"
 
+#define CAM_JPEG_CTX_MAX              8
 #define CAM_JPEG_DEV_PER_TYPE_MAX     1
 
 #define CAM_JPEG_CMD_BUF_MAX_SIZE     128
@@ -16,7 +24,6 @@
 #define JPEG_VOTE                     640000000
 
 #define CAM_JPEG_HW_DUMP_TAG_MAX_LEN 32
-#define CAM_JPEG_HW_DUMP_NUM_WORDS   5
 
 enum cam_jpeg_hw_type {
 	CAM_JPEG_DEV_ENC,
@@ -31,16 +38,16 @@ struct cam_jpeg_set_irq_cb {
 };
 
 struct cam_jpeg_hw_dump_args {
-	uint64_t  request_id;
 	uintptr_t cpu_addr;
-	size_t    offset;
+	uint64_t  offset;
+	uint64_t  request_id;
 	size_t    buf_len;
 };
 
 struct cam_jpeg_hw_dump_header {
-	uint8_t     tag[CAM_JPEG_HW_DUMP_TAG_MAX_LEN];
-	uint64_t    size;
-	uint32_t    word_size;
+	char     tag[CAM_JPEG_HW_DUMP_TAG_MAX_LEN];
+	uint64_t size;
+	uint32_t word_size;
 };
 
 enum cam_jpeg_cmd_type {

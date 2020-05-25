@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/of.h>
@@ -8,6 +15,7 @@
 #include <linux/videodev2.h>
 #include <linux/uaccess.h>
 #include <linux/platform_device.h>
+#include <linux/firmware.h>
 #include <linux/delay.h>
 #include <linux/timer.h>
 
@@ -41,7 +49,7 @@ int cam_jpeg_enc_init_hw(void *device_priv,
 	struct cam_hw_soc_info *soc_info = NULL;
 	struct cam_jpeg_enc_device_core_info *core_info = NULL;
 	struct cam_ahb_vote ahb_vote;
-	struct cam_axi_vote axi_vote = {0};
+	struct cam_axi_vote axi_vote;
 	int rc;
 
 	if (!device_priv) {
@@ -66,19 +74,10 @@ int cam_jpeg_enc_init_hw(void *device_priv,
 	}
 
 	ahb_vote.type = CAM_VOTE_ABSOLUTE;
-	ahb_vote.vote.level = CAM_LOWSVS_VOTE;
-	axi_vote.num_paths = 2;
-	axi_vote.axi_path[0].path_data_type = CAM_AXI_PATH_DATA_ALL;
-	axi_vote.axi_path[0].transac_type = CAM_AXI_TRANSACTION_READ;
-	axi_vote.axi_path[0].camnoc_bw = JPEG_VOTE;
-	axi_vote.axi_path[0].mnoc_ab_bw = JPEG_VOTE;
-	axi_vote.axi_path[0].mnoc_ib_bw = JPEG_VOTE;
-	axi_vote.axi_path[1].path_data_type = CAM_AXI_PATH_DATA_ALL;
-	axi_vote.axi_path[1].transac_type = CAM_AXI_TRANSACTION_WRITE;
-	axi_vote.axi_path[1].camnoc_bw = JPEG_VOTE;
-	axi_vote.axi_path[1].mnoc_ab_bw = JPEG_VOTE;
-	axi_vote.axi_path[1].mnoc_ib_bw = JPEG_VOTE;
-
+	ahb_vote.vote.level = CAM_SVS_VOTE;
+	axi_vote.compressed_bw = JPEG_VOTE;
+	axi_vote.compressed_bw_ab = JPEG_VOTE;
+	axi_vote.uncompressed_bw = JPEG_VOTE;
 
 	rc = cam_cpas_start(core_info->cpas_handle,
 		&ahb_vote, &axi_vote);
@@ -92,6 +91,9 @@ int cam_jpeg_enc_init_hw(void *device_priv,
 		CAM_ERR(CAM_JPEG, "soc enable is failed %d", rc);
 		goto soc_failed;
 	}
+	spin_lock(&jpeg_enc_dev->hw_lock);
+	jpeg_enc_dev->hw_state = CAM_HW_STATE_POWER_UP;
+	spin_unlock(&jpeg_enc_dev->hw_lock);
 
 	mutex_unlock(&core_info->core_mutex);
 
@@ -141,6 +143,9 @@ int cam_jpeg_enc_deinit_hw(void *device_priv,
 		return -EFAULT;
 	}
 
+	spin_lock(&jpeg_enc_dev->hw_lock);
+	jpeg_enc_dev->hw_state = CAM_HW_STATE_POWER_DOWN;
+	spin_unlock(&jpeg_enc_dev->hw_lock);
 	rc = cam_jpeg_enc_disable_soc_resources(soc_info);
 	if (rc)
 		CAM_ERR(CAM_JPEG, "soc disable failed %d", rc);
@@ -174,12 +179,19 @@ irqreturn_t cam_jpeg_enc_irq(int irq_num, void *data)
 	hw_info = core_info->jpeg_enc_hw_info;
 	mem_base = soc_info->reg_map[0].mem_base;
 
+	spin_lock(&jpeg_enc_dev->hw_lock);
+	if (jpeg_enc_dev->hw_state == CAM_HW_STATE_POWER_DOWN) {
+		CAM_ERR(CAM_JPEG, "JPEG HW is in off state");
+		spin_unlock(&jpeg_enc_dev->hw_lock);
+		return -EINVAL;
+	}
 	irq_status = cam_io_r_mb(mem_base +
 		core_info->jpeg_enc_hw_info->reg_offset.int_status);
 
 	cam_io_w_mb(irq_status,
 		soc_info->reg_map[0].mem_base +
 		core_info->jpeg_enc_hw_info->reg_offset.int_clr);
+	spin_unlock(&jpeg_enc_dev->hw_lock);
 
 	CAM_DBG(CAM_JPEG, "irq_num %d  irq_status = %x , core_state %d",
 		irq_num, irq_status, core_info->core_state);
@@ -269,6 +281,12 @@ int cam_jpeg_enc_reset_hw(void *data,
 
 	mutex_lock(&core_info->core_mutex);
 	spin_lock(&jpeg_enc_dev->hw_lock);
+	if (jpeg_enc_dev->hw_state == CAM_HW_STATE_POWER_DOWN) {
+		CAM_ERR(CAM_JPEG, "JPEG HW is in off state");
+		spin_unlock(&jpeg_enc_dev->hw_lock);
+		mutex_unlock(&core_info->core_mutex);
+		return -EINVAL;
+	}
 	if (core_info->core_state == CAM_JPEG_ENC_CORE_RESETTING) {
 		CAM_ERR(CAM_JPEG, "alrady resetting");
 		spin_unlock(&jpeg_enc_dev->hw_lock);
@@ -320,10 +338,18 @@ int cam_jpeg_enc_start_hw(void *data,
 	hw_info = core_info->jpeg_enc_hw_info;
 	mem_base = soc_info->reg_map[0].mem_base;
 
-	if (core_info->core_state != CAM_JPEG_ENC_CORE_READY) {
-		CAM_ERR(CAM_JPEG, "Error not ready");
+	spin_lock(&jpeg_enc_dev->hw_lock);
+	if (jpeg_enc_dev->hw_state == CAM_HW_STATE_POWER_DOWN) {
+		CAM_ERR(CAM_JPEG, "JPEG HW is in off state");
+		spin_unlock(&jpeg_enc_dev->hw_lock);
 		return -EINVAL;
 	}
+	if (core_info->core_state != CAM_JPEG_ENC_CORE_READY) {
+		CAM_ERR(CAM_JPEG, "Error not ready");
+		spin_unlock(&jpeg_enc_dev->hw_lock);
+		return -EINVAL;
+	}
+	spin_unlock(&jpeg_enc_dev->hw_lock);
 
 	cam_io_w_mb(hw_info->reg_val.hw_cmd_start,
 		mem_base + hw_info->reg_offset.hw_cmd);
@@ -353,6 +379,12 @@ int cam_jpeg_enc_stop_hw(void *data,
 
 	mutex_lock(&core_info->core_mutex);
 	spin_lock(&jpeg_enc_dev->hw_lock);
+	if (jpeg_enc_dev->hw_state == CAM_HW_STATE_POWER_DOWN) {
+		CAM_ERR(CAM_JPEG, "JPEG HW is in off state");
+		spin_unlock(&jpeg_enc_dev->hw_lock);
+		mutex_unlock(&core_info->core_mutex);
+		return -EINVAL;
+	}
 	if (core_info->core_state == CAM_JPEG_ENC_CORE_ABORTING) {
 		CAM_ERR(CAM_JPEG, "alrady stopping");
 		spin_unlock(&jpeg_enc_dev->hw_lock);
@@ -378,56 +410,41 @@ int cam_jpeg_enc_stop_hw(void *data,
 	return 0;
 }
 
-int cam_jpeg_enc_hw_dump(
-	struct cam_hw_info           *jpeg_enc_dev,
+static int cam_jpeg_enc_hw_dump(
+	struct cam_hw_info *jpeg_enc_dev,
 	struct cam_jpeg_hw_dump_args *dump_args)
 {
 
-	int                                   i;
-	uint8_t                              *dst;
-	uint32_t                             *addr, *start;
-	uint32_t                              num_reg, min_len;
-	uint32_t                              reg_start_offset;
-	size_t                                remain_len;
-	struct cam_hw_soc_info               *soc_info;
-	struct cam_jpeg_hw_dump_header       *hdr;
-	struct cam_jpeg_enc_device_hw_info   *hw_info;
+	struct cam_hw_soc_info *soc_info = NULL;
+	int i;
+	char *dst;
+	uint32_t *addr, *start;
+	struct cam_jpeg_hw_dump_header *hdr;
+	uint32_t num_reg, min_len, remain_len, reg_start_offset;
 	struct cam_jpeg_enc_device_core_info *core_info;
+	struct cam_jpeg_enc_device_hw_info *hw_info = NULL;
 
 	soc_info = &jpeg_enc_dev->soc_info;
 	core_info = (struct cam_jpeg_enc_device_core_info *)
 		jpeg_enc_dev->core_info;
 	hw_info = core_info->jpeg_enc_hw_info;
-	mutex_lock(&core_info->core_mutex);
 	spin_lock(&jpeg_enc_dev->hw_lock);
-
 	if (jpeg_enc_dev->hw_state == CAM_HW_STATE_POWER_DOWN) {
 		CAM_ERR(CAM_JPEG, "JPEG HW is in off state");
 		spin_unlock(&jpeg_enc_dev->hw_lock);
-		mutex_unlock(&core_info->core_mutex);
 		return -EINVAL;
 	}
-
 	spin_unlock(&jpeg_enc_dev->hw_lock);
-
-	if (dump_args->buf_len <= dump_args->offset) {
-		CAM_WARN(CAM_JPEG, "dump buffer overshoot %zu %zu",
-			dump_args->buf_len, dump_args->offset);
-		mutex_unlock(&core_info->core_mutex);
-		return -ENOSPC;
-	}
-
 	remain_len = dump_args->buf_len - dump_args->offset;
-	min_len =  sizeof(struct cam_jpeg_hw_dump_header) +
-		    soc_info->reg_map[0].size + sizeof(uint32_t);
+	min_len =  2 * (sizeof(struct cam_jpeg_hw_dump_header) +
+		    CAM_JPEG_HW_DUMP_TAG_MAX_LEN) +
+		    soc_info->reg_map[0].size;
 	if (remain_len < min_len) {
-		CAM_WARN(CAM_JPEG, "dump buffer exhaust %zu %u",
+		CAM_ERR(CAM_JPEG, "dump buffer exhaust %d %d",
 			remain_len, min_len);
-		mutex_unlock(&core_info->core_mutex);
-		return -ENOSPC;
+		return 0;
 	}
-
-	dst = (uint8_t *)dump_args->cpu_addr + dump_args->offset;
+	dst = (char *)dump_args->cpu_addr + dump_args->offset;
 	hdr = (struct cam_jpeg_hw_dump_header *)dst;
 	snprintf(hdr->tag, CAM_JPEG_HW_DUMP_TAG_MAX_LEN,
 		"JPEG_REG:");
@@ -443,12 +460,10 @@ int cam_jpeg_enc_hw_dump(
 			reg_start_offset + i*4;
 		*addr++ = cam_io_r(soc_info->reg_map[0].mem_base + (i*4));
 	}
-
-	mutex_unlock(&core_info->core_mutex);
 	hdr->size = hdr->word_size * (addr - start);
 	dump_args->offset += hdr->size +
 		sizeof(struct cam_jpeg_hw_dump_header);
-	CAM_DBG(CAM_JPEG, "offset %zu", dump_args->offset);
+	CAM_DBG(CAM_JPEG, "offset %d", dump_args->offset);
 
 	return 0;
 }

@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _CAM_REQ_MGR_UTIL_API_H_
@@ -43,6 +50,7 @@ struct handle {
 	uint32_t hdl_value;
 	enum hdl_type type;
 	enum hdl_state state;
+	uint64_t dev_id;
 	void *ops;
 	void *priv;
 };
@@ -54,7 +62,7 @@ struct handle {
  * @bits: size of bit map in bits
  */
 struct cam_req_mgr_util_hdl_tbl {
-	struct handle hdl[CAM_REQ_MGR_MAX_HANDLES_V2];
+	struct handle hdl[CAM_REQ_MGR_MAX_HANDLES];
 	void *bitmap;
 	size_t bits;
 };
@@ -73,6 +81,7 @@ struct cam_create_dev_hdl {
 	int32_t v4l2_sub_dev_flag;
 	int32_t media_entity_flag;
 	int32_t reserved;
+	uint64_t dev_id;
 	void *ops;
 	void *priv;
 };

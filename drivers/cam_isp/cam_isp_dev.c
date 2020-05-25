@@ -1,24 +1,31 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/module.h>
+#include <linux/ion.h>
 #include <linux/iommu.h>
 #include <linux/timer.h>
 #include <linux/kernel.h>
 
-#include <media/cam_req_mgr.h>
+#include <uapi/media/cam_req_mgr.h>
 #include "cam_isp_dev.h"
 #include "cam_hw_mgr_intf.h"
 #include "cam_isp_hw_mgr_intf.h"
 #include "cam_node.h"
 #include "cam_debug_util.h"
 #include "cam_smmu_api.h"
-#include "camera_main.h"
 
 static struct cam_isp_dev g_isp_dev;
 
@@ -91,38 +98,39 @@ static const struct v4l2_subdev_internal_ops cam_isp_subdev_internal_ops = {
 	.open = cam_isp_subdev_open,
 };
 
-static int cam_isp_dev_component_bind(struct device *dev,
-	struct device *master_dev, void *data)
+static int cam_isp_dev_remove(struct platform_device *pdev)
+{
+	int rc = 0;
+	int i;
+
+	/* clean up resources */
+	for (i = 0; i < CAM_CTX_MAX; i++) {
+		rc = cam_isp_context_deinit(&g_isp_dev.ctx_isp[i]);
+		if (rc)
+			CAM_ERR(CAM_ISP, "ISP context %d deinit failed",
+				 i);
+	}
+
+	rc = cam_subdev_remove(&g_isp_dev.sd);
+	if (rc)
+		CAM_ERR(CAM_ISP, "Unregister failed");
+
+	memset(&g_isp_dev, 0, sizeof(g_isp_dev));
+	return 0;
+}
+
+static int cam_isp_dev_probe(struct platform_device *pdev)
 {
 	int rc = -1;
 	int i;
 	struct cam_hw_mgr_intf         hw_mgr_intf;
 	struct cam_node               *node;
-	const char                    *compat_str = NULL;
-	uint32_t                       isp_device_type;
-	struct platform_device *pdev = to_platform_device(dev);
-
 	int iommu_hdl = -1;
 
-	rc = of_property_read_string_index(pdev->dev.of_node, "arch-compat", 0,
-		(const char **)&compat_str);
-
 	g_isp_dev.sd.internal_ops = &cam_isp_subdev_internal_ops;
-	/* Initialize the v4l2 subdevice first. (create cam_node) */
-	if (strnstr(compat_str, "ife", strlen(compat_str))) {
-		rc = cam_subdev_probe(&g_isp_dev.sd, pdev, CAM_ISP_DEV_NAME,
+	/* Initialze the v4l2 subdevice first. (create cam_node) */
+	rc = cam_subdev_probe(&g_isp_dev.sd, pdev, CAM_ISP_DEV_NAME,
 		CAM_IFE_DEVICE_TYPE);
-		isp_device_type = CAM_IFE_DEVICE_TYPE;
-	} else if (strnstr(compat_str, "tfe", strlen(compat_str))) {
-		rc = cam_subdev_probe(&g_isp_dev.sd, pdev, CAM_ISP_DEV_NAME,
-		CAM_TFE_DEVICE_TYPE);
-		isp_device_type = CAM_TFE_DEVICE_TYPE;
-	} else  {
-		CAM_ERR(CAM_ISP, "Invalid ISP hw type %s", compat_str);
-		rc = -EINVAL;
-		goto err;
-	}
-
 	if (rc) {
 		CAM_ERR(CAM_ISP, "ISP cam_subdev_probe failed!");
 		goto err;
@@ -130,7 +138,7 @@ static int cam_isp_dev_component_bind(struct device *dev,
 	node = (struct cam_node *) g_isp_dev.sd.token;
 
 	memset(&hw_mgr_intf, 0, sizeof(hw_mgr_intf));
-	rc = cam_isp_hw_mgr_init(compat_str, &hw_mgr_intf, &iommu_hdl);
+	rc = cam_isp_hw_mgr_init(pdev->dev.of_node, &hw_mgr_intf, &iommu_hdl);
 	if (rc != 0) {
 		CAM_ERR(CAM_ISP, "Can not initialized ISP HW manager!");
 		goto unregister;
@@ -141,8 +149,7 @@ static int cam_isp_dev_component_bind(struct device *dev,
 			&g_isp_dev.ctx[i],
 			&node->crm_node_intf,
 			&node->hw_mgr_intf,
-			i,
-			isp_device_type);
+			i);
 		if (rc) {
 			CAM_ERR(CAM_ISP, "ISP context init failed!");
 			goto unregister;
@@ -161,7 +168,7 @@ static int cam_isp_dev_component_bind(struct device *dev,
 
 	mutex_init(&g_isp_dev.isp_mutex);
 
-	CAM_INFO(CAM_ISP, "Component bound successfully");
+	CAM_INFO(CAM_ISP, "Camera ISP probe complete");
 
 	return 0;
 unregister:
@@ -170,51 +177,8 @@ err:
 	return rc;
 }
 
-static void cam_isp_dev_component_unbind(struct device *dev,
-	struct device *master_dev, void *data)
-{
-	int rc = 0;
-	int i;
 
-	/* clean up resources */
-	for (i = 0; i < CAM_CTX_MAX; i++) {
-		rc = cam_isp_context_deinit(&g_isp_dev.ctx_isp[i]);
-		if (rc)
-			CAM_ERR(CAM_ISP, "ISP context %d deinit failed",
-				 i);
-	}
-
-	rc = cam_subdev_remove(&g_isp_dev.sd);
-	if (rc)
-		CAM_ERR(CAM_ISP, "Unregister failed rc: %d", rc);
-
-	memset(&g_isp_dev, 0, sizeof(g_isp_dev));
-}
-
-const static struct component_ops cam_isp_dev_component_ops = {
-	.bind = cam_isp_dev_component_bind,
-	.unbind = cam_isp_dev_component_unbind,
-};
-
-static int cam_isp_dev_remove(struct platform_device *pdev)
-{
-	component_del(&pdev->dev, &cam_isp_dev_component_ops);
-	return 0;
-}
-
-static int cam_isp_dev_probe(struct platform_device *pdev)
-{
-	int rc = 0;
-
-	CAM_DBG(CAM_ISP, "Adding ISP dev component");
-	rc = component_add(&pdev->dev, &cam_isp_dev_component_ops);
-	if (rc)
-		CAM_ERR(CAM_ISP, "failed to add component rc: %d", rc);
-
-	return rc;
-}
-
-struct platform_driver isp_driver = {
+static struct platform_driver isp_driver = {
 	.probe = cam_isp_dev_probe,
 	.remove = cam_isp_dev_remove,
 	.driver = {
@@ -225,15 +189,17 @@ struct platform_driver isp_driver = {
 	},
 };
 
-int cam_isp_dev_init_module(void)
+static int __init cam_isp_dev_init_module(void)
 {
 	return platform_driver_register(&isp_driver);
 }
 
-void cam_isp_dev_exit_module(void)
+static void __exit cam_isp_dev_exit_module(void)
 {
 	platform_driver_unregister(&isp_driver);
 }
 
+module_init(cam_isp_dev_init_module);
+module_exit(cam_isp_dev_exit_module);
 MODULE_DESCRIPTION("MSM ISP driver");
 MODULE_LICENSE("GPL v2");

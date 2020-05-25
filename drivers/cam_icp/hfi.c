@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/io.h>
@@ -11,6 +18,7 @@
 #include <linux/timer.h>
 #include <media/cam_icp.h>
 #include <linux/iopoll.h>
+#include <soc/qcom/socinfo.h>
 
 #include "cam_io_util.h"
 #include "hfi_reg.h"
@@ -19,6 +27,7 @@
 #include "hfi_intf.h"
 #include "cam_icp_hw_mgr_intf.h"
 #include "cam_debug_util.h"
+#include "cam_soc_util.h"
 
 #define HFI_VERSION_INFO_MAJOR_VAL  1
 #define HFI_VERSION_INFO_MINOR_VAL  1
@@ -64,24 +73,28 @@ void cam_hfi_queue_dump(void)
 		qtbl_hdr->qtbl_num_q, qtbl_hdr->qtbl_qhdr_size);
 
 	cmd_q_hdr = &qtbl->q_hdr[Q_CMD];
-	CAM_DBG(CAM_HFI, "cmd: size = %u r_idx = %u w_idx = %u addr = %x",
+	CAM_INFO(CAM_HFI, "cmd: size = %u r_idx = %u w_idx = %u addr = %x",
 		cmd_q_hdr->qhdr_q_size, cmd_q_hdr->qhdr_read_idx,
 		cmd_q_hdr->qhdr_write_idx, hfi_mem->cmd_q.iova);
 	read_q = (uint32_t *)g_hfi->map.cmd_q.kva;
 	read_ptr = (uint32_t *)(read_q + 0);
+	CAM_INFO(CAM_HFI, "CMD Q %p", read_q);
 	CAM_DBG(CAM_HFI, "CMD Q START");
 	for (i = 0; i < ICP_CMD_Q_SIZE_IN_BYTES >> BYTE_WORD_SHIFT; i++)
 		CAM_DBG(CAM_HFI, "Word: %d Data: 0x%08x ", i, read_ptr[i]);
+	CAM_DBG(CAM_HFI, "CMD Q END");
 
 	msg_q_hdr = &qtbl->q_hdr[Q_MSG];
-	CAM_DBG(CAM_HFI, "msg: size = %u r_idx = %u w_idx = %u addr = %x",
+	CAM_INFO(CAM_HFI, "msg: size = %u r_idx = %u w_idx = %u addr = %x",
 		msg_q_hdr->qhdr_q_size, msg_q_hdr->qhdr_read_idx,
 		msg_q_hdr->qhdr_write_idx, hfi_mem->msg_q.iova);
 	read_q = (uint32_t *)g_hfi->map.msg_q.kva;
 	read_ptr = (uint32_t *)(read_q + 0);
+	CAM_INFO(CAM_HFI, "MSG Q %p", read_ptr);
 	CAM_DBG(CAM_HFI, "MSG Q START");
 	for (i = 0; i < ICP_MSG_Q_SIZE_IN_BYTES >> BYTE_WORD_SHIFT; i++)
 		CAM_DBG(CAM_HFI, "Word: %d Data: 0x%08x ", i, read_ptr[i]);
+	CAM_DBG(CAM_HFI, "MSG Q END");
 }
 
 int hfi_write_cmd(void *cmd_ptr)
@@ -185,7 +198,7 @@ int hfi_read_message(uint32_t *pmsg, uint8_t q_id,
 	}
 
 	if (q_id > Q_DBG) {
-		CAM_ERR(CAM_HFI, "Invalid q :%u", q_id);
+		CAM_ERR(CAM_HFI, "Inavlid q :%u", q_id);
 		return -EINVAL;
 	}
 
@@ -278,10 +291,6 @@ int hfi_cmd_ubwc_config(uint32_t *ubwc_cfg)
 	size = sizeof(struct hfi_cmd_prop) +
 		sizeof(struct hfi_cmd_ubwc_cfg);
 
-	CAM_DBG(CAM_HFI,
-		"size of ubwc %u, ubwc_cfg [rd-0x%x,wr-0x%x]",
-		size, ubwc_cfg[0],  ubwc_cfg[1]);
-
 	prop = kzalloc(size, GFP_KERNEL);
 	if (!prop)
 		return -ENOMEM;
@@ -299,42 +308,6 @@ int hfi_cmd_ubwc_config(uint32_t *ubwc_cfg)
 
 	return 0;
 }
-
-int hfi_cmd_ubwc_config_ext(uint32_t *ubwc_ipe_cfg,
-	uint32_t *ubwc_bps_cfg)
-{
-	uint8_t *prop;
-	struct hfi_cmd_prop *dbg_prop;
-	uint32_t size = 0;
-
-	size = sizeof(struct hfi_cmd_prop) +
-		sizeof(struct hfi_cmd_ubwc_cfg_ext);
-
-	CAM_DBG(CAM_HFI,
-		"size of ubwc %u, ubwc_ipe_cfg[rd-0x%x,wr-0x%x] ubwc_bps_cfg[rd-0x%x,wr-0x%x]",
-		size, ubwc_ipe_cfg[0], ubwc_ipe_cfg[1],
-		ubwc_bps_cfg[0], ubwc_bps_cfg[1]);
-
-	prop = kzalloc(size, GFP_KERNEL);
-	if (!prop)
-		return -ENOMEM;
-
-	dbg_prop = (struct hfi_cmd_prop *)prop;
-	dbg_prop->size = size;
-	dbg_prop->pkt_type = HFI_CMD_SYS_SET_PROPERTY;
-	dbg_prop->num_prop = 1;
-	dbg_prop->prop_data[0] = HFI_PROPERTY_SYS_UBWC_CONFIG_EX;
-	dbg_prop->prop_data[1] = ubwc_bps_cfg[0];
-	dbg_prop->prop_data[2] = ubwc_bps_cfg[1];
-	dbg_prop->prop_data[3] = ubwc_ipe_cfg[0];
-	dbg_prop->prop_data[4] = ubwc_ipe_cfg[1];
-
-	hfi_write_cmd(prop);
-	kfree(prop);
-
-	return 0;
-}
-
 
 int hfi_enable_ipe_bps_pc(bool enable, uint32_t core_info)
 {
@@ -679,7 +652,7 @@ int cam_hfi_init(uint8_t event_driven_mode, struct hfi_mem_info *hfi_mem,
 	struct hfi_qtbl *qtbl;
 	struct hfi_qtbl_hdr *qtbl_hdr;
 	struct hfi_q_hdr *cmd_q_hdr, *msg_q_hdr, *dbg_q_hdr;
-	uint32_t hw_version, fw_version, status = 0;
+	uint32_t hw_version, soc_version, fw_version, status = 0;
 	uint32_t retry_cnt = 0;
 	struct sfr_buf *sfr_buffer;
 
@@ -701,6 +674,7 @@ int cam_hfi_init(uint8_t event_driven_mode, struct hfi_mem_info *hfi_mem,
 
 	memcpy(&g_hfi->map, hfi_mem, sizeof(g_hfi->map));
 	g_hfi->hfi_state = HFI_DEINIT;
+	soc_version = socinfo_get_version();
 	if (debug) {
 		cam_io_w_mb(
 		(uint32_t)(ICP_FLAG_CSR_A5_EN | ICP_FLAG_CSR_WAKE_UP_EN |

@@ -1,16 +1,25 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _CAM_SENSOR_DEV_H_
 #define _CAM_SENSOR_DEV_H_
 
 #include <linux/delay.h>
+#include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/module.h>
 #include <linux/irqreturn.h>
+#include <linux/ion.h>
 #include <linux/iommu.h>
 #include <linux/timer.h>
 #include <linux/kernel.h>
@@ -27,6 +36,9 @@
 
 #define NUM_MASTERS 2
 #define NUM_QUEUES 2
+
+#define TRUE  1
+#define FALSE 0
 
 #undef CDBG
 #ifdef CAM_SENSOR_DEBUG
@@ -46,19 +58,26 @@ enum cam_sensor_state_t {
 };
 
 /**
- * struct sensor_intf_params
+ * struct intf_params
  * @device_hdl: Device Handle
  * @session_hdl: Session Handle
  * @link_hdl: Link Handle
  * @ops: KMD operations
  * @crm_cb: Callback API pointers
  */
-struct sensor_intf_params {
+struct intf_params {
 	int32_t device_hdl;
 	int32_t session_hdl;
 	int32_t link_hdl;
 	struct cam_req_mgr_kmd_ops ops;
 	struct cam_req_mgr_crm_cb *crm_cb;
+};
+
+struct cam_sensor_intr_t {
+	struct cam_sensor_ctrl_t *sctrl;
+	struct gpio gpio_array[1];
+	int work_inited;
+	struct work_struct irq_work;
 };
 
 /**
@@ -104,24 +123,14 @@ struct cam_sensor_ctrl_t {
 	uint8_t sensor_probe_data_type;
 	struct i2c_data_settings i2c_data;
 	struct  cam_sensor_query_cap sensor_info;
-	struct sensor_intf_params bridge_intf;
+	struct intf_params bridge_intf;
 	uint32_t streamon_count;
 	uint32_t streamoff_count;
 	int bob_reg_index;
 	bool bob_pwm_switch;
 	uint32_t last_flush_req;
 	uint16_t pipeline_delay;
+	struct cam_sensor_intr_t s_intr[AIS_MAX_INTR_GPIO];
 };
-
-/**
- * @brief : API to register SENSOR hw to platform framework.
- * @return struct platform_device pointer on on success, or ERR_PTR() on error.
- */
-int cam_sensor_driver_init(void);
-
-/**
- * @brief : API to remove SENSOR Hw from platform framework.
- */
-void cam_sensor_driver_exit(void);
 
 #endif /* _CAM_SENSOR_DEV_H_ */

@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _CAM_SENSOR_CMN_HEADER_
@@ -13,10 +20,12 @@
 #include <linux/timer.h>
 #include <linux/delay.h>
 #include <linux/list.h>
+#include <media/ais_sensor.h>
 #include <media/cam_sensor.h>
 #include <media/cam_req_mgr.h>
 
-#define MAX_POWER_CONFIG    12
+#define MAX_REGULATOR 5
+#define MAX_POWER_CONFIG 12
 
 #define MAX_PER_FRAME_ARRAY 32
 #define BATCH_SIZE_MAX      16
@@ -77,7 +86,6 @@ enum camera_flash_opcode {
 	CAMERA_SENSOR_FLASH_OP_OFF,
 	CAMERA_SENSOR_FLASH_OP_FIRELOW,
 	CAMERA_SENSOR_FLASH_OP_FIREHIGH,
-	CAMERA_SENSOR_FLASH_OP_FIREDURATION,
 	CAMERA_SENSOR_FLASH_OP_MAX,
 };
 
@@ -125,6 +133,7 @@ enum sensor_sub_module {
 	SUB_MODULE_CSID,
 	SUB_MODULE_CSIPHY,
 	SUB_MODULE_OIS,
+	SUB_MODULE_IR_LED,
 	SUB_MODULE_EXT,
 	SUB_MODULE_MAX,
 };
@@ -142,7 +151,6 @@ enum msm_camera_power_seq_type {
 	SENSOR_STANDBY,
 	SENSOR_CUSTOM_GPIO1,
 	SENSOR_CUSTOM_GPIO2,
-	SENSOR_VANA1,
 	SENSOR_SEQ_TYPE_MAX,
 };
 
@@ -153,26 +161,22 @@ enum cam_sensor_packet_opcodes {
 	CAM_SENSOR_PACKET_OPCODE_SENSOR_PROBE,
 	CAM_SENSOR_PACKET_OPCODE_SENSOR_CONFIG,
 	CAM_SENSOR_PACKET_OPCODE_SENSOR_STREAMOFF,
-	CAM_SENSOR_PACKET_OPCODE_SENSOR_READ,
 	CAM_SENSOR_PACKET_OPCODE_SENSOR_NOP = 127
 };
 
 enum cam_actuator_packet_opcodes {
 	CAM_ACTUATOR_PACKET_OPCODE_INIT,
 	CAM_ACTUATOR_PACKET_AUTO_MOVE_LENS,
-	CAM_ACTUATOR_PACKET_MANUAL_MOVE_LENS,
-	CAM_ACTUATOR_PACKET_OPCODE_READ
+	CAM_ACTUATOR_PACKET_MANUAL_MOVE_LENS
 };
 
 enum cam_eeprom_packet_opcodes {
-	CAM_EEPROM_PACKET_OPCODE_INIT,
-	CAM_EEPROM_WRITE
+	CAM_EEPROM_PACKET_OPCODE_INIT
 };
 
 enum cam_ois_packet_opcodes {
 	CAM_OIS_PACKET_OPCODE_INIT,
-	CAM_OIS_PACKET_OPCODE_OIS_CONTROL,
-	CAM_OIS_PACKET_OPCODE_READ
+	CAM_OIS_PACKET_OPCODE_OIS_CONTROL
 };
 
 enum msm_bus_perf_setting {
@@ -222,16 +226,15 @@ enum cam_sensor_i2c_cmd_type {
 	CAM_SENSOR_I2C_WRITE_RANDOM,
 	CAM_SENSOR_I2C_WRITE_BURST,
 	CAM_SENSOR_I2C_WRITE_SEQ,
-	CAM_SENSOR_I2C_READ_RANDOM,
-	CAM_SENSOR_I2C_READ_SEQ,
-	CAM_SENSOR_I2C_POLL
+	CAM_SENSOR_I2C_READ,
+	CAM_SENSOR_I2C_POLL,
+	CAM_SENSOR_I2C_SET_I2C_INFO
 };
 
 struct common_header {
-	uint32_t    first_word;
-	uint8_t     fifth_byte;
+	uint16_t    first_word;
+	uint8_t     third_byte;
 	uint8_t     cmd_type;
-	uint16_t    reserved;
 };
 
 struct camera_vreg_t {
@@ -271,24 +274,20 @@ struct cam_sensor_i2c_reg_array {
 
 struct cam_sensor_i2c_reg_setting {
 	struct cam_sensor_i2c_reg_array *reg_setting;
-	uint32_t size;
+	unsigned short size;
 	enum camera_sensor_i2c_type addr_type;
 	enum camera_sensor_i2c_type data_type;
 	unsigned short delay;
-	uint8_t *read_buff;
-	uint32_t read_buff_len;
 };
 
-struct cam_sensor_i2c_seq_reg {
-	uint32_t reg_addr;
-	uint8_t  *reg_data;
-	uint32_t size;
-	enum camera_sensor_i2c_type addr_type;
+struct cam_sensor_i2c_slave_info {
+	uint16_t slave_addr;
+	uint8_t i2c_freq_mode;
 };
 
 struct i2c_settings_list {
 	struct cam_sensor_i2c_reg_setting i2c_settings;
-	struct cam_sensor_i2c_seq_reg seq_settings;
+	struct cam_sensor_i2c_slave_info slave_info;
 	enum cam_sensor_i2c_cmd_type op_code;
 	struct list_head list;
 };
@@ -304,7 +303,6 @@ struct i2c_data_settings {
 	struct i2c_settings_array config_settings;
 	struct i2c_settings_array streamon_settings;
 	struct i2c_settings_array streamoff_settings;
-	struct i2c_settings_array read_settings;
 	struct i2c_settings_array *per_frame;
 };
 
@@ -324,6 +322,7 @@ struct cam_camera_slave_info {
 	uint16_t sensor_id_reg_addr;
 	uint16_t sensor_id;
 	uint16_t sensor_id_mask;
+	uint8_t  i2c_freq_mode;
 };
 
 struct msm_sensor_init_params {
@@ -339,9 +338,6 @@ enum msm_sensor_camera_id_t {
 	CAMERA_4,
 	CAMERA_5,
 	CAMERA_6,
-	CAMERA_7,
-	CAMERA_8,
-	CAMERA_9,
 	MAX_CAMERAS,
 };
 

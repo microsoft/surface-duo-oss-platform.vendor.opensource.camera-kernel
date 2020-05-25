@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include "cam_cci_dev.h"
@@ -14,10 +21,9 @@ int cam_cci_init(struct v4l2_subdev *sd,
 	struct cci_device *cci_dev;
 	enum cci_i2c_master_t master = c_ctrl->cci_info->cci_i2c_master;
 	struct cam_ahb_vote ahb_vote;
-	struct cam_axi_vote axi_vote = {0};
+	struct cam_axi_vote axi_vote;
 	struct cam_hw_soc_info *soc_info = NULL;
 	void __iomem *base = NULL;
-	uint32_t max_queue_0_size = 0, max_queue_1_size = 0;
 
 	cci_dev = v4l2_get_subdevdata(sd);
 	if (!cci_dev || !c_ctrl) {
@@ -53,9 +59,8 @@ int cam_cci_init(struct v4l2_subdev *sd,
 			for (i = 0; i < NUM_QUEUES; i++)
 				reinit_completion(
 				&cci_dev->cci_master_info[master].report_q[i]);
-			/* Set reset pending flag to true */
-			cci_dev->cci_master_info[master].reset_pending = true;
-			cci_dev->cci_master_info[master].status = 0;
+			/* Set reset pending flag to TRUE */
+			cci_dev->cci_master_info[master].reset_pending = TRUE;
 			/* Set proper mask to RESET CMD address */
 			if (master == MASTER_0)
 				cam_io_w_mb(CCI_M0_RESET_RMSK,
@@ -69,25 +74,16 @@ int cam_cci_init(struct v4l2_subdev *sd,
 				CCI_TIMEOUT);
 			if (rc <= 0)
 				CAM_ERR(CAM_CCI, "wait failed %d", rc);
-			cci_dev->cci_master_info[master].status = 0;
 			mutex_unlock(&cci_dev->cci_master_info[master].mutex);
 		}
 		return 0;
 	}
 
 	ahb_vote.type = CAM_VOTE_ABSOLUTE;
-	ahb_vote.vote.level = CAM_LOWSVS_VOTE;
-	axi_vote.num_paths = 1;
-	axi_vote.axi_path[0].path_data_type =
-		CAM_AXI_PATH_DATA_ALL;
-	axi_vote.axi_path[0].transac_type =
-		CAM_AXI_TRANSACTION_WRITE;
-	axi_vote.axi_path[0].camnoc_bw =
-		CAM_CPAS_DEFAULT_AXI_BW;
-	axi_vote.axi_path[0].mnoc_ab_bw =
-		CAM_CPAS_DEFAULT_AXI_BW;
-	axi_vote.axi_path[0].mnoc_ib_bw =
-		CAM_CPAS_DEFAULT_AXI_BW;
+	ahb_vote.vote.level = CAM_SVS_VOTE;
+	axi_vote.compressed_bw = CAM_CPAS_DEFAULT_AXI_BW;
+	axi_vote.compressed_bw_ab = CAM_CPAS_DEFAULT_AXI_BW;
+	axi_vote.uncompressed_bw = CAM_CPAS_DEFAULT_AXI_BW;
 
 	rc = cam_cpas_start(cci_dev->cpas_handle,
 		&ahb_vote, &axi_vote);
@@ -119,23 +115,14 @@ int cam_cci_init(struct v4l2_subdev *sd,
 		MSM_CCI_WRITE_DATA_PAYLOAD_SIZE_11;
 	cci_dev->support_seq_write = 1;
 
-	if (of_device_is_compatible(soc_info->dev->of_node,
-						"qcom,cci-v1.2")) {
-		max_queue_0_size = CCI_I2C_QUEUE_0_SIZE_V_1_2;
-		max_queue_1_size = CCI_I2C_QUEUE_1_SIZE_V_1_2;
-	} else {
-		max_queue_0_size = CCI_I2C_QUEUE_0_SIZE;
-		max_queue_1_size = CCI_I2C_QUEUE_1_SIZE;
-	}
-
 	for (i = 0; i < NUM_MASTERS; i++) {
 		for (j = 0; j < NUM_QUEUES; j++) {
 			if (j == QUEUE_0)
 				cci_dev->cci_i2c_queue_info[i][j].max_queue_size
-					= max_queue_0_size;
+					= CCI_I2C_QUEUE_0_SIZE;
 			else
 				cci_dev->cci_i2c_queue_info[i][j].max_queue_size
-					= max_queue_1_size;
+					= CCI_I2C_QUEUE_1_SIZE;
 
 			CAM_DBG(CAM_CCI, "CCI Master[%d] :: Q0 : %d Q1 : %d", i,
 			cci_dev->cci_i2c_queue_info[i][j].max_queue_size,
@@ -143,8 +130,7 @@ int cam_cci_init(struct v4l2_subdev *sd,
 		}
 	}
 
-	cci_dev->cci_master_info[master].reset_pending = true;
-	cci_dev->cci_master_info[master].status = 0;
+	cci_dev->cci_master_info[master].reset_pending = TRUE;
 	cam_io_w_mb(CCI_RESET_CMD_RMSK, base +
 			CCI_RESET_CMD_ADDR);
 	cam_io_w_mb(0x1, base + CCI_RESET_CMD_ADDR);
@@ -378,6 +364,10 @@ int cam_cci_parse_dt_info(struct platform_device *pdev,
 	cam_cci_init_cci_params(new_cci_dev);
 	cam_cci_init_clk_params(new_cci_dev);
 
+	rc = of_platform_populate(pdev->dev.of_node, NULL, NULL, &pdev->dev);
+	if (rc)
+		CAM_ERR(CAM_CCI, "failed to add child nodes, rc=%d", rc);
+
 	for (i = 0; i < MASTER_MAX; i++) {
 		new_cci_dev->write_wq[i] = create_singlethread_workqueue(
 			"cam_cci_wq");
@@ -420,7 +410,9 @@ int cam_cci_soc_release(struct cci_device *cci_dev)
 	cci_dev->cci_state = CCI_STATE_DISABLED;
 	cci_dev->cycles_per_us = 0;
 
-	cam_cpas_stop(cci_dev->cpas_handle);
+	rc = cam_cpas_stop(cci_dev->cpas_handle);
+	if (rc)
+		CAM_ERR(CAM_CCI, "cpas stop failed %d", rc);
 
 	return rc;
 }

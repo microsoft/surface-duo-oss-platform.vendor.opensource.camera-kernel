@@ -1,16 +1,25 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _CAM_CSIPHY_DEV_H_
 #define _CAM_CSIPHY_DEV_H_
 
 #include <linux/delay.h>
+#include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/module.h>
 #include <linux/irqreturn.h>
+#include <linux/ion.h>
 #include <linux/iommu.h>
 #include <linux/timer.h>
 #include <linux/kernel.h>
@@ -28,7 +37,7 @@
 #include "cam_debug_util.h"
 #include "cam_context.h"
 
-#define MAX_CSIPHY                  6
+#define MAX_CSIPHY                  3
 #define MAX_DPHY_DATA_LN            4
 #define MAX_LRME_V4l2_EVENTS        30
 #define CSIPHY_NUM_CLK_MAX          16
@@ -40,6 +49,7 @@
 #define MAX_DATA_RATES              3
 #define MAX_DATA_RATE_REGS          30
 
+#define MAX_REGULATOR         5
 #define CAMX_CSIPHY_DEV_NAME "cam-csiphy-driver"
 
 #define CSIPHY_POWER_UP       0
@@ -119,13 +129,13 @@ struct csiphy_reg_parms_t {
 };
 
 /**
- * struct csiphy_intf_params
+ * struct intf_params
  * @device_hdl: Device Handle
  * @session_hdl: Session Handle
  * @ops: KMD operations
  * @crm_cb: Callback API pointers
  */
-struct csiphy_intf_params {
+struct intf_params {
 	int32_t device_hdl[CSIPHY_MAX_INSTANCES];
 	int32_t session_hdl[CSIPHY_MAX_INSTANCES];
 	int32_t link_hdl[CSIPHY_MAX_INSTANCES];
@@ -235,33 +245,34 @@ struct cam_csiphy_param {
 
 /**
  * struct csiphy_device
- * @device_name:                Device name
- * @pdev:                       Platform device
- * @irq:                        Interrupt structure
- * @base:                       Base address
- * @hw_version:                 Hardware Version
- * @csiphy_state:               CSIPhy state
- * @ctrl_reg:                   CSIPhy control registers
- * @num_clk:                    Number of clocks
- * @csiphy_max_clk:             Max timer clock rate
- * @num_vreg:                   Number of regulators
- * @csiphy_clk:                 Clock structure
- * @csiphy_clk_info:            Clock information structure
- * @csiphy_vreg:                Regulator structure
- * @csiphy_reg_ptr:             Regulator structure
- * @csiphy_3p_clk_info:         3Phase clock information
- * @csiphy_3p_clk:              3Phase clocks structure
- * @csi_3phase:                 Is it a 3Phase mode
- * @ref_count:                  Reference count
- * @clk_lane:                   Clock lane
- * @acquire_count:              Acquire device count
- * @start_dev_count:            Start count
- * @is_acquired_dev_combo_mode: Flag that mentions whether already acquired
- *                              device is for combo mode
- * @soc_info:                   SOC information
- * @cpas_handle:                CPAS handle
- * @config_count:               Config reg count
- * @csiphy_cpas_cp_reg_mask:    CP reg mask for phy instance
+ * @device_name: Device name
+ * @pdev: Platform device
+ * @irq: Interrupt structure
+ * @base: Base address
+ * @hw_version: Hardware Version
+ * @csiphy_state: CSIPhy state
+ * @ctrl_reg: CSIPhy control registers
+ * @num_clk: Number of clocks
+ * @csiphy_max_clk: Max timer clock rate
+ * @num_vreg: Number of regulators
+ * @csiphy_clk: Clock structure
+ * @csiphy_clk_info: Clock information structure
+ * @csiphy_vreg: Regulator structure
+ * @csiphy_reg_ptr: Regulator structure
+ * @csiphy_3p_clk_info: 3Phase clock information
+ * @csiphy_3p_clk: 3Phase clocks structure
+ * @csi_3phase: Is it a 3Phase mode
+ * @ref_count: Reference count
+ * @clk_lane: Clock lane
+ * @acquire_count: Acquire device count
+ * @start_dev_count: Start count
+ * @is_acquired_dev_combo_mode:
+ *    Flag that mentions whether already acquired
+ *   device is for combo mode
+ * @soc_info: SOC information
+ * @cpas_handle: CPAS handle
+ * @config_count: Config reg count
+ * @csiphy_cpas_cp_reg_mask: CP reg mask for phy instance
  */
 struct csiphy_device {
 	char device_name[CAM_CTX_DEV_NAME_MAX_LENGTH];
@@ -276,11 +287,10 @@ struct csiphy_device {
 	int32_t ref_count;
 	uint16_t lane_mask[MAX_CSIPHY];
 	uint8_t is_csiphy_3phase_hw;
-	uint8_t is_divisor_32_comp;
 	uint8_t num_irq_registers;
 	struct cam_subdev v4l2_dev_str;
 	struct cam_csiphy_param csiphy_info;
-	struct csiphy_intf_params bridge_intf;
+	struct intf_params bridge_intf;
 	uint32_t clk_lane;
 	uint32_t acquire_count;
 	uint32_t start_dev_count;
@@ -291,14 +301,4 @@ struct csiphy_device {
 	uint64_t csiphy_cpas_cp_reg_mask[CSIPHY_MAX_INSTANCES];
 };
 
-/**
- * @brief : API to register CSIPHY hw to platform framework.
- * @return struct platform_device pointer on on success, or ERR_PTR() on error.
- */
-int32_t cam_csiphy_init_module(void);
-
-/**
- * @brief : API to remove CSIPHY Hw from platform framework.
- */
-void cam_csiphy_exit_module(void);
 #endif /* _CAM_CSIPHY_DEV_H_ */

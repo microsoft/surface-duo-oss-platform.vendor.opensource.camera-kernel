@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _HFI_INTF_H_
@@ -134,16 +141,7 @@ int hfi_set_fw_dump_level(uint32_t lvl);
 int hfi_enable_ipe_bps_pc(bool enable, uint32_t core_info);
 
 /**
- * hfi_cmd_ubwc_config_ext() - UBWC configuration to firmware
- * @ubwc_ipe_cfg: UBWC ipe fetch/write configuration params
- * @ubwc_bps_cfg: UBWC bps fetch/write configuration params
- */
-int hfi_cmd_ubwc_config_ext(uint32_t *ubwc_ipe_cfg,
-	uint32_t *ubwc_bps_cfg);
-
-/**
  * hfi_cmd_ubwc_config() - UBWC configuration to firmware
- *                         for older targets
  * @ubwc_cfg: UBWC configuration parameters
  */
 int hfi_cmd_ubwc_config(uint32_t *ubwc_cfg);

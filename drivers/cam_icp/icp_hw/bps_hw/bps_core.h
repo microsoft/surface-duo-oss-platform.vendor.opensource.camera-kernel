@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef CAM_BPS_CORE_H
@@ -10,6 +17,7 @@
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/dma-buf.h>
 
 #define BPS_COLLAPSE_MASK 0x1
 #define BPS_PWR_ON_MASK   0x2
@@ -36,15 +44,4 @@ int cam_bps_process_cmd(void *device_priv, uint32_t cmd_type,
 	void *cmd_args, uint32_t arg_size);
 
 irqreturn_t cam_bps_irq(int irq_num, void *data);
-
-/**
- * @brief : API to register BPS hw to platform framework.
- * @return struct platform_device pointer on on success, or ERR_PTR() on error.
- */
-int cam_bps_init_module(void);
-
-/**
- * @brief : API to remove BPS Hw from platform framework.
- */
-void cam_bps_exit_module(void);
 #endif /* CAM_BPS_CORE_H */

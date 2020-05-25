@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -144,7 +151,7 @@ static int cam_lrme_mgr_util_prepare_io_buffer(int32_t iommu_hdl,
 	int rc = -EINVAL;
 	uint32_t num_in_buf, num_out_buf, i, j, plane;
 	struct cam_buf_io_cfg *io_cfg;
-	dma_addr_t io_addr[CAM_PACKET_MAX_PLANES];
+	uint64_t io_addr[CAM_PACKET_MAX_PLANES];
 	size_t size;
 
 	num_in_buf = 0;
@@ -674,9 +681,10 @@ static int cam_lrme_mgr_hw_dump(void *hw_mgr_priv, void *hw_dump_args)
 	rc  = cam_mem_get_cpu_buf(dump_args->buf_handle,
 		&lrme_dump_args.cpu_addr,
 		&lrme_dump_args.buf_len);
-	if (rc) {
-		CAM_ERR(CAM_LRME, "Invalid handle %u rc %d",
-			dump_args->buf_handle, rc);
+	if (!lrme_dump_args.cpu_addr || !lrme_dump_args.buf_len || rc) {
+		CAM_ERR(CAM_LRME,
+			"lnvalid addr %u len %zu rc %d",
+			dump_args->buf_handle, lrme_dump_args.buf_len, rc);
 		return rc;
 	}
 	lrme_dump_args.offset =  dump_args->offset;
@@ -687,9 +695,12 @@ static int cam_lrme_mgr_hw_dump(void *hw_mgr_priv, void *hw_dump_args)
 		CAM_LRME_HW_CMD_DUMP,
 		&lrme_dump_args,
 		sizeof(struct cam_lrme_hw_dump_args));
-	CAM_DBG(CAM_LRME, "Offset before %zu after %zu",
-		dump_args->offset, lrme_dump_args.offset);
 	dump_args->offset = lrme_dump_args.offset;
+
+	rc  = cam_mem_put_cpu_buf(dump_args->buf_handle);
+	if (rc)
+		CAM_ERR(CAM_LRME, "Cpu put failed handle %u",
+			dump_args->buf_handle);
 	return rc;
 }
 
@@ -908,7 +919,8 @@ static int cam_lrme_mgr_hw_prepare_update(void *hw_mgr_priv,
 		kmd_buf.size, kmd_buf.used_bytes);
 
 	rc = cam_packet_util_process_patches(args->packet,
-		hw_mgr->device_iommu.non_secure, hw_mgr->device_iommu.secure);
+		hw_mgr->device_iommu.non_secure,
+		hw_mgr->device_iommu.secure, 0);
 	if (rc) {
 		CAM_ERR(CAM_LRME, "Patch packet failed, rc=%d", rc);
 		return rc;
@@ -1189,9 +1201,9 @@ int cam_lrme_hw_mgr_init(struct cam_hw_mgr_intf *hw_mgr_intf,
 	hw_mgr_intf->hw_write = NULL;
 	hw_mgr_intf->hw_close = NULL;
 	hw_mgr_intf->hw_flush = cam_lrme_mgr_hw_flush;
+	hw_mgr_intf->hw_dump = cam_lrme_mgr_hw_dump;
 
 	g_lrme_hw_mgr.event_cb = cam_lrme_dev_buf_done_cb;
-	hw_mgr_intf->hw_dump = cam_lrme_mgr_hw_dump;
 
 	cam_lrme_mgr_create_debugfs_entry();
 

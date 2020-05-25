@@ -1,28 +1,32 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2014-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
 #include <linux/dma-buf.h>
+#include <asm/dma-iommu.h>
 #include <linux/dma-direction.h>
 #include <linux/of_platform.h>
 #include <linux/iommu.h>
 #include <linux/slab.h>
 #include <linux/dma-mapping.h>
-#include <linux/of_address.h>
 #include <linux/msm_dma_iommu_mapping.h>
 #include <linux/workqueue.h>
 #include <linux/genalloc.h>
-#include <linux/debugfs.h>
+#include <soc/qcom/scm.h>
 #include <soc/qcom/secure_buffer.h>
-
-#include <media/cam_req_mgr.h>
-
-#include "cam_compat.h"
+#include <uapi/media/cam_req_mgr.h>
+#include <linux/debugfs.h>
 #include "cam_smmu_api.h"
 #include "cam_debug_util.h"
-#include "camera_main.h"
 
 #define SHARED_MEM_POOL_GRANULARITY 16
 
@@ -32,8 +36,7 @@
 #define COOKIE_SIZE (BYTE_SIZE*COOKIE_NUM_BYTE)
 #define COOKIE_MASK ((1<<COOKIE_SIZE)-1)
 #define HANDLE_INIT (-1)
-#define CAM_SMMU_CB_MAX 6
-#define CAM_SMMU_SHARED_HDL_MAX 6
+#define CAM_SMMU_CB_MAX 5
 
 #define GET_SMMU_HDL(x, y) (((x) << COOKIE_SIZE) | ((y) & COOKIE_MASK))
 #define GET_SMMU_TABLE_IDX(x) (((x) >> COOKIE_SIZE) & COOKIE_MASK)
@@ -41,7 +44,13 @@
 static int g_num_pf_handled = 4;
 module_param(g_num_pf_handled, int, 0644);
 
-struct cam_fw_alloc_info icp_fw;
+struct firmware_alloc_info {
+	struct device *fw_dev;
+	void *fw_kva;
+	dma_addr_t fw_dma_hdl;
+};
+
+struct firmware_alloc_info icp_fw;
 
 struct cam_smmu_work_payload {
 	int idx;
@@ -92,10 +101,10 @@ struct secheap_buf_info {
 
 struct cam_context_bank_info {
 	struct device *dev;
-	struct iommu_domain *domain;
+	struct dma_iommu_mapping *mapping;
 	dma_addr_t va_start;
 	size_t va_len;
-	const char *name[CAM_SMMU_SHARED_HDL_MAX];
+	const char *name;
 	bool is_secure;
 	uint8_t scratch_buf_support;
 	uint8_t firmware_support;
@@ -130,11 +139,6 @@ struct cam_context_bank_info {
 	int cb_count;
 	int secure_count;
 	int pf_count;
-	size_t io_mapping_size;
-	size_t shared_mapping_size;
-	bool is_mul_client;
-	int device_count;
-	int num_shared_hdl;
 };
 
 struct cam_iommu_cb_set {
@@ -145,8 +149,6 @@ struct cam_iommu_cb_set {
 	struct mutex payload_list_lock;
 	struct list_head payload_list;
 	u32 non_fatal_fault;
-	struct dentry *dentry;
-	bool cb_dump_enable;
 };
 
 static const struct of_device_id msm_cam_smmu_dt_match[] = {
@@ -185,6 +187,10 @@ static const char *qdss_region_name = "qdss";
 
 static struct cam_iommu_cb_set iommu_cb_set;
 
+static struct dentry *smmu_dentry;
+
+static bool smmu_fatal_flag = true;
+
 static enum dma_data_direction cam_smmu_translate_dir(
 	enum cam_smmu_map_dir dir);
 
@@ -219,9 +225,8 @@ static struct cam_dma_buff_info *cam_smmu_find_mapping_by_virt_address(int idx,
 	dma_addr_t virt_addr);
 
 static int cam_smmu_map_buffer_and_add_to_list(int idx, int ion_fd,
-	bool dis_delayed_unmap, enum dma_data_direction dma_dir,
-	dma_addr_t *paddr_ptr, size_t *len_ptr,
-	enum cam_smmu_region_id region_id);
+	enum dma_data_direction dma_dir, dma_addr_t *paddr_ptr,
+	size_t *len_ptr, enum cam_smmu_region_id region_id);
 
 static int cam_smmu_map_kernel_buffer_and_add_to_list(int idx,
 	struct dma_buf *buf, enum dma_data_direction dma_dir,
@@ -244,8 +249,6 @@ static int cam_smmu_free_scratch_buffer_remove_from_list(
 static void cam_smmu_clean_user_buffer_list(int idx);
 
 static void cam_smmu_clean_kernel_buffer_list(int idx);
-
-static void cam_smmu_dump_cb_info(int idx);
 
 static void cam_smmu_print_user_list(int idx);
 
@@ -294,52 +297,31 @@ static void cam_smmu_page_fault_work(struct work_struct *work)
 				buf_info);
 		}
 	}
-	cam_smmu_dump_cb_info(idx);
 	kfree(payload);
 }
 
-static void cam_smmu_dump_cb_info(int idx)
+static int cam_smmu_create_debugfs_entry(void)
 {
-	struct cam_dma_buff_info *mapping, *mapping_temp;
-	size_t shared_reg_len = 0, io_reg_len = 0;
-	size_t shared_free_len = 0, io_free_len = 0;
-	uint32_t i = 0;
-	struct cam_context_bank_info *cb_info =
-		&iommu_cb_set.cb_info[idx];
+	int rc = 0;
 
-	if (cb_info->shared_support) {
-		shared_reg_len = cb_info->shared_info.iova_len;
-		shared_free_len = shared_reg_len - cb_info->shared_mapping_size;
+	smmu_dentry = debugfs_create_dir("camera_smmu", NULL);
+	if (!smmu_dentry)
+		return -ENOMEM;
+
+	if (!debugfs_create_bool("cam_smmu_fatal",
+		0644,
+		smmu_dentry,
+		&smmu_fatal_flag)) {
+		CAM_ERR(CAM_SMMU, "failed to create cam_smmu_fatal entry");
+		rc = -ENOMEM;
+		goto err;
 	}
 
-	if (cb_info->io_support) {
-		io_reg_len = cb_info->io_info.iova_len;
-		io_free_len = io_reg_len - cb_info->io_mapping_size;
-	}
-
-	CAM_ERR(CAM_SMMU,
-		"********** Context bank dump for %s **********",
-		cb_info->name);
-	CAM_ERR(CAM_SMMU,
-		"Usage: shared_usage=%u io_usage=%u shared_free=%u io_free=%u",
-		(unsigned int)cb_info->shared_mapping_size,
-		(unsigned int)cb_info->io_mapping_size,
-		(unsigned int)shared_free_len,
-		(unsigned int)io_free_len);
-
-	if (iommu_cb_set.cb_dump_enable) {
-		list_for_each_entry_safe(mapping, mapping_temp,
-			&iommu_cb_set.cb_info[idx].smmu_buf_list, list) {
-			i++;
-			CAM_ERR(CAM_SMMU,
-				"%u. ion_fd=%d start=0x%x end=0x%x len=%u region=%d",
-				i, mapping->ion_fd, (void *)mapping->paddr,
-				((uint64_t)mapping->paddr +
-				(uint64_t)mapping->len),
-				(unsigned int)mapping->len,
-				mapping->region_id);
-		}
-	}
+	return rc;
+err:
+	debugfs_remove_recursive(smmu_dentry);
+	smmu_dentry = NULL;
+	return rc;
 }
 
 static void cam_smmu_print_user_list(int idx)
@@ -374,16 +356,12 @@ static void cam_smmu_print_kernel_list(int idx)
 
 static void cam_smmu_print_table(void)
 {
-	int i, j;
+	int i;
 
 	for (i = 0; i < iommu_cb_set.cb_num; i++) {
-		for (j = 0; j < iommu_cb_set.cb_info[i].num_shared_hdl; j++) {
-			CAM_ERR(CAM_SMMU,
-				"i= %d, handle= %d, name_addr=%pK name %s",
-				i, (int)iommu_cb_set.cb_info[i].handle,
-				(void *)iommu_cb_set.cb_info[i].name[j],
-				iommu_cb_set.cb_info[i].name[j]);
-		}
+		CAM_ERR(CAM_SMMU, "i= %d, handle= %d, name_addr=%pK", i,
+			   (int)iommu_cb_set.cb_info[i].handle,
+			   (void *)iommu_cb_set.cb_info[i].name);
 		CAM_ERR(CAM_SMMU, "dev = %pK", iommu_cb_set.cb_info[i].dev);
 	}
 }
@@ -408,7 +386,7 @@ static uint32_t cam_smmu_find_closest_mapping(int idx, void *vaddr)
 				"Found va 0x%lx in:0x%lx-0x%lx, fd %d cb:%s",
 				current_addr, start_addr,
 				end_addr, mapping->ion_fd,
-				iommu_cb_set.cb_info[idx].name[0]);
+				iommu_cb_set.cb_info[idx].name);
 			goto end;
 		} else {
 			if (start_addr > current_addr)
@@ -431,17 +409,16 @@ end:
 	if (closest_mapping) {
 		buf_handle = GET_MEM_HANDLE(idx, closest_mapping->ion_fd);
 		CAM_INFO(CAM_SMMU,
-			"Closest map fd %d 0x%lx %llu-%llu 0x%lx-0x%lx buf=%pK mem %0x",
+			"Closest map fd %d 0x%lx 0x%lx-0x%lx buf=%pK mem %0x",
 			closest_mapping->ion_fd, current_addr,
-			mapping->len, closest_mapping->len,
 			(unsigned long)closest_mapping->paddr,
 			(unsigned long)closest_mapping->paddr + mapping->len,
 			closest_mapping->buf,
 			buf_handle);
 	} else
-		CAM_ERR(CAM_SMMU,
+		CAM_INFO(CAM_SMMU,
 			"Cannot find vaddr:%lx in SMMU %s virt address",
-			current_addr, iommu_cb_set.cb_info[idx].name[0]);
+			current_addr, iommu_cb_set.cb_info[idx].name);
 
 	return buf_handle;
 }
@@ -477,7 +454,7 @@ void cam_smmu_set_client_page_fault_handler(int handle,
 		if (iommu_cb_set.cb_info[idx].cb_count == CAM_SMMU_CB_MAX) {
 			CAM_ERR(CAM_SMMU,
 				"%s Should not regiester more handlers",
-				iommu_cb_set.cb_info[idx].name[0]);
+				iommu_cb_set.cb_info[idx].name);
 			mutex_unlock(&iommu_cb_set.cb_info[idx].lock);
 			return;
 		}
@@ -505,7 +482,7 @@ void cam_smmu_set_client_page_fault_handler(int handle,
 		if (i == CAM_SMMU_CB_MAX)
 			CAM_ERR(CAM_SMMU,
 				"Error: hdl %x no matching tokens: %s",
-				handle, iommu_cb_set.cb_info[idx].name[0]);
+				handle, iommu_cb_set.cb_info[idx].name);
 	}
 	mutex_unlock(&iommu_cb_set.cb_info[idx].lock);
 }
@@ -547,7 +524,7 @@ void cam_smmu_unset_client_page_fault_handler(int handle, void *token)
 	}
 	if (i == CAM_SMMU_CB_MAX)
 		CAM_ERR(CAM_SMMU, "Error: hdl %x no matching tokens: %s",
-			handle, iommu_cb_set.cb_info[idx].name[0]);
+			handle, iommu_cb_set.cb_info[idx].name);
 	mutex_unlock(&iommu_cb_set.cb_info[idx].lock);
 }
 
@@ -570,7 +547,7 @@ static int cam_smmu_iommu_fault_handler(struct iommu_domain *domain,
 	cb_name = (char *)token;
 	/* Check whether it is in the table */
 	for (idx = 0; idx < iommu_cb_set.cb_num; idx++) {
-		if (!strcmp(iommu_cb_set.cb_info[idx].name[0], cb_name))
+		if (!strcmp(iommu_cb_set.cb_info[idx].name, cb_name))
 			break;
 	}
 
@@ -711,7 +688,7 @@ static int cam_smmu_attach_device(int idx)
 	struct cam_context_bank_info *cb = &iommu_cb_set.cb_info[idx];
 
 	/* attach the mapping to device */
-	rc = iommu_attach_device(cb->domain, cb->dev);
+	rc = arm_iommu_attach_device(cb->dev, cb->mapping);
 	if (rc < 0) {
 		CAM_ERR(CAM_SMMU, "Error: ARM IOMMU attach failed. ret = %d",
 			rc);
@@ -724,75 +701,52 @@ static int cam_smmu_attach_device(int idx)
 static int cam_smmu_create_add_handle_in_table(char *name,
 	int *hdl)
 {
-	int i, j, rc = -EINVAL;
+	int i;
 	int handle;
 
 	/* create handle and add in the iommu hardware table */
 	for (i = 0; i < iommu_cb_set.cb_num; i++) {
-		for (j = 0; j < iommu_cb_set.cb_info[i].num_shared_hdl; j++) {
-			if (strcmp(iommu_cb_set.cb_info[i].name[j], name))
-				continue;
-
-			if (iommu_cb_set.cb_info[i].handle == HANDLE_INIT) {
-				mutex_lock(&iommu_cb_set.cb_info[i].lock);
-				/* make sure handle is unique */
-				do {
-					handle =
-						cam_smmu_create_iommu_handle(i);
-				} while (cam_smmu_check_handle_unique(handle));
-
-				/* put handle in the table */
-				iommu_cb_set.cb_info[i].handle = handle;
-				iommu_cb_set.cb_info[i].cb_count = 0;
+		if (!strcmp(iommu_cb_set.cb_info[i].name, name)) {
+			mutex_lock(&iommu_cb_set.cb_info[i].lock);
+			if (iommu_cb_set.cb_info[i].handle != HANDLE_INIT) {
 				if (iommu_cb_set.cb_info[i].is_secure)
 					iommu_cb_set.cb_info[i].secure_count++;
 
-				if (iommu_cb_set.cb_info[i].is_mul_client)
-					iommu_cb_set.cb_info[i].device_count++;
-
-				*hdl = handle;
-				CAM_DBG(CAM_SMMU, "%s creates handle 0x%x",
-					name, handle);
 				mutex_unlock(&iommu_cb_set.cb_info[i].lock);
-				rc = 0;
-				goto end;
-			} else {
-				mutex_lock(&iommu_cb_set.cb_info[i].lock);
 				if (iommu_cb_set.cb_info[i].is_secure) {
-					iommu_cb_set.cb_info[i].secure_count++;
 					*hdl = iommu_cb_set.cb_info[i].handle;
-					mutex_unlock(
-						&iommu_cb_set.cb_info[i].lock);
-					return 0;
-				}
-
-				if (iommu_cb_set.cb_info[i].is_mul_client) {
-					iommu_cb_set.cb_info[i].device_count++;
-					*hdl = iommu_cb_set.cb_info[i].handle;
-					mutex_unlock(
-						&iommu_cb_set.cb_info[i].lock);
-					CAM_INFO(CAM_SMMU,
-						"%s already got handle 0x%x",
-						name,
-						iommu_cb_set.cb_info[i].handle);
 					return 0;
 				}
 
 				CAM_ERR(CAM_SMMU,
 					"Error: %s already got handle 0x%x",
 					name, iommu_cb_set.cb_info[i].handle);
-				mutex_unlock(&iommu_cb_set.cb_info[i].lock);
-				rc = -EALREADY;
-				goto end;
+
+				return -EINVAL;
 			}
+
+			/* make sure handle is unique */
+			do {
+				handle = cam_smmu_create_iommu_handle(i);
+			} while (cam_smmu_check_handle_unique(handle));
+
+			/* put handle in the table */
+			iommu_cb_set.cb_info[i].handle = handle;
+			iommu_cb_set.cb_info[i].cb_count = 0;
+			if (iommu_cb_set.cb_info[i].is_secure)
+				iommu_cb_set.cb_info[i].secure_count++;
+			*hdl = handle;
+			CAM_DBG(CAM_SMMU, "%s creates handle 0x%x",
+				name, handle);
+			mutex_unlock(&iommu_cb_set.cb_info[i].lock);
+			return 0;
 		}
 	}
 
 	CAM_ERR(CAM_SMMU, "Error: Cannot find name %s or all handle exist",
 		name);
 	cam_smmu_print_table();
-end:
-	return rc;
+	return -EINVAL;
 }
 
 static int cam_smmu_init_scratch_map(struct scratch_mapping *scratch_map,
@@ -1071,7 +1025,7 @@ static int cam_smmu_detach_device(int idx)
 	if (iommu_cb_set.cb_info[idx].state == CAM_SMMU_DETACH) {
 		rc = -EALREADY;
 	} else if (iommu_cb_set.cb_info[idx].state == CAM_SMMU_ATTACH) {
-		iommu_detach_device(cb->domain, cb->dev);
+		arm_iommu_detach_device(cb->dev);
 		iommu_cb_set.cb_info[idx].state = CAM_SMMU_DETACH;
 	}
 
@@ -1203,17 +1157,23 @@ int cam_smmu_alloc_firmware(int32_t smmu_hdl,
 	firmware_start = iommu_cb_set.cb_info[idx].firmware_info.iova_start;
 	CAM_DBG(CAM_SMMU, "Firmware area len from DT = %zu", firmware_len);
 
-	rc = cam_reserve_icp_fw(&icp_fw, firmware_len);
-	if (rc)
+	icp_fw.fw_kva = dma_alloc_coherent(icp_fw.fw_dev,
+		firmware_len,
+		&icp_fw.fw_dma_hdl,
+		GFP_KERNEL);
+	if (!icp_fw.fw_kva) {
+		CAM_ERR(CAM_SMMU, "FW memory alloc failed");
+		rc = -ENOMEM;
 		goto unlock_and_end;
-	else
+	} else {
 		CAM_DBG(CAM_SMMU, "DMA alloc returned fw = %pK, hdl = %pK",
-			icp_fw.fw_kva, (void *)icp_fw.fw_hdl);
+			icp_fw.fw_kva, (void *)icp_fw.fw_dma_hdl);
+	}
 
-	domain = iommu_cb_set.cb_info[idx].domain;
+	domain = iommu_cb_set.cb_info[idx].mapping->domain;
 	rc = iommu_map(domain,
 		firmware_start,
-		(phys_addr_t) icp_fw.fw_hdl,
+		icp_fw.fw_dma_hdl,
 		firmware_len,
 		IOMMU_READ|IOMMU_WRITE|IOMMU_PRIV);
 
@@ -1232,7 +1192,10 @@ int cam_smmu_alloc_firmware(int32_t smmu_hdl,
 	return rc;
 
 alloc_fail:
-	cam_unreserve_icp_fw(&icp_fw, firmware_len);
+	dma_free_coherent(icp_fw.fw_dev,
+		firmware_len,
+		icp_fw.fw_kva,
+		icp_fw.fw_dma_hdl);
 unlock_and_end:
 	mutex_unlock(&iommu_cb_set.cb_info[idx].lock);
 end:
@@ -1280,7 +1243,7 @@ int cam_smmu_dealloc_firmware(int32_t smmu_hdl)
 
 	firmware_len = iommu_cb_set.cb_info[idx].firmware_info.iova_len;
 	firmware_start = iommu_cb_set.cb_info[idx].firmware_info.iova_start;
-	domain = iommu_cb_set.cb_info[idx].domain;
+	domain = iommu_cb_set.cb_info[idx].mapping->domain;
 	unmapped = iommu_unmap(domain,
 		firmware_start,
 		firmware_len);
@@ -1292,10 +1255,13 @@ int cam_smmu_dealloc_firmware(int32_t smmu_hdl)
 		rc = -EINVAL;
 	}
 
-	cam_unreserve_icp_fw(&icp_fw, firmware_len);
+	dma_free_coherent(icp_fw.fw_dev,
+		firmware_len,
+		icp_fw.fw_kva,
+		icp_fw.fw_dma_hdl);
 
-	icp_fw.fw_kva = NULL;
-	icp_fw.fw_hdl = 0;
+	icp_fw.fw_kva = 0;
+	icp_fw.fw_dma_hdl = 0;
 
 	iommu_cb_set.cb_info[idx].is_fw_allocated = false;
 
@@ -1350,7 +1316,7 @@ int cam_smmu_alloc_qdss(int32_t smmu_hdl,
 	qdss_phy_addr = iommu_cb_set.cb_info[idx].qdss_phy_addr;
 	CAM_DBG(CAM_SMMU, "QDSS area len from DT = %zu", qdss_len);
 
-	domain = iommu_cb_set.cb_info[idx].domain;
+	domain = iommu_cb_set.cb_info[idx].mapping->domain;
 	rc = iommu_map(domain,
 		qdss_start,
 		qdss_phy_addr,
@@ -1417,7 +1383,7 @@ int cam_smmu_dealloc_qdss(int32_t smmu_hdl)
 
 	qdss_len = iommu_cb_set.cb_info[idx].qdss_info.iova_len;
 	qdss_start = iommu_cb_set.cb_info[idx].qdss_info.iova_start;
-	domain = iommu_cb_set.cb_info[idx].domain;
+	domain = iommu_cb_set.cb_info[idx].mapping->domain;
 	unmapped = iommu_unmap(domain, qdss_start, qdss_len);
 
 	if (unmapped != qdss_len) {
@@ -1623,7 +1589,7 @@ int cam_smmu_reserve_sec_heap(int32_t smmu_hdl,
 
 	sec_heap_iova = iommu_cb_set.cb_info[idx].secheap_info.iova_start;
 	sec_heap_iova_len = iommu_cb_set.cb_info[idx].secheap_info.iova_len;
-	size = iommu_map_sg(iommu_cb_set.cb_info[idx].domain,
+	size = iommu_map_sg(iommu_cb_set.cb_info[idx].mapping->domain,
 		sec_heap_iova,
 		secheap_buf->table->sgl,
 		secheap_buf->table->nents,
@@ -1687,7 +1653,7 @@ int cam_smmu_release_sec_heap(int32_t smmu_hdl)
 	sec_heap_iova = iommu_cb_set.cb_info[idx].secheap_info.iova_start;
 	sec_heap_iova_len = iommu_cb_set.cb_info[idx].secheap_info.iova_len;
 
-	size = iommu_unmap(iommu_cb_set.cb_info[idx].domain,
+	size = iommu_unmap(iommu_cb_set.cb_info[idx].mapping->domain,
 		sec_heap_iova,
 		sec_heap_iova_len);
 	if (size != sec_heap_iova_len) {
@@ -1710,7 +1676,7 @@ EXPORT_SYMBOL(cam_smmu_release_sec_heap);
 static int cam_smmu_map_buffer_validate(struct dma_buf *buf,
 	int idx, enum dma_data_direction dma_dir, dma_addr_t *paddr_ptr,
 	size_t *len_ptr, enum cam_smmu_region_id region_id,
-	bool dis_delayed_unmap, struct cam_dma_buff_info **mapping_info)
+	struct cam_dma_buff_info **mapping_info)
 {
 	struct dma_buf_attachment *attach = NULL;
 	struct sg_table *table = NULL;
@@ -1747,7 +1713,7 @@ static int cam_smmu_map_buffer_validate(struct dma_buf *buf,
 			goto err_detach;
 		}
 
-		domain = iommu_cb_set.cb_info[idx].domain;
+		domain = iommu_cb_set.cb_info[idx].mapping->domain;
 		if (!domain) {
 			CAM_ERR(CAM_SMMU, "CB has no domain set");
 			goto err_unmap_sg;
@@ -1783,10 +1749,8 @@ static int cam_smmu_map_buffer_validate(struct dma_buf *buf,
 			*paddr_ptr = iova;
 			*len_ptr = size;
 		}
-		iommu_cb_set.cb_info[idx].shared_mapping_size += *len_ptr;
 	} else if (region_id == CAM_SMMU_REGION_IO) {
-		if (!dis_delayed_unmap)
-			attach->dma_map_attrs |= DMA_ATTR_DELAYED_UNMAP;
+		attach->dma_map_attrs |= DMA_ATTR_DELAYED_UNMAP;
 
 		table = dma_buf_map_attachment(attach, dma_dir);
 		if (IS_ERR_OR_NULL(table)) {
@@ -1797,16 +1761,14 @@ static int cam_smmu_map_buffer_validate(struct dma_buf *buf,
 
 		*paddr_ptr = sg_dma_address(table->sgl);
 		*len_ptr = (size_t)buf->size;
-		iommu_cb_set.cb_info[idx].io_mapping_size += *len_ptr;
 	} else {
 		CAM_ERR(CAM_SMMU, "Error: Wrong region id passed");
 		rc = -EINVAL;
 		goto err_unmap_sg;
 	}
 
-	CAM_DBG(CAM_SMMU,
-		"iova=%pK, region_id=%d, paddr=%pK, len=%d, dma_map_attrs=%d",
-		iova, region_id, *paddr_ptr, *len_ptr, attach->dma_map_attrs);
+	CAM_DBG(CAM_SMMU, "iova=%pK, region_id=%d, paddr=%pK, len=%d",
+		iova, region_id, *paddr_ptr, *len_ptr);
 
 	if (table->sgl) {
 		CAM_DBG(CAM_SMMU,
@@ -1858,7 +1820,7 @@ err_alloc:
 			size,
 			iommu_cb_set.cb_info[idx].handle);
 
-		iommu_unmap(iommu_cb_set.cb_info[idx].domain,
+		iommu_unmap(iommu_cb_set.cb_info[idx].mapping->domain,
 			*paddr_ptr,
 			*len_ptr);
 	}
@@ -1874,9 +1836,8 @@ err_out:
 
 
 static int cam_smmu_map_buffer_and_add_to_list(int idx, int ion_fd,
-	bool dis_delayed_unmap, enum dma_data_direction dma_dir,
-	dma_addr_t *paddr_ptr, size_t *len_ptr,
-	enum cam_smmu_region_id region_id)
+	 enum dma_data_direction dma_dir, dma_addr_t *paddr_ptr,
+	 size_t *len_ptr, enum cam_smmu_region_id region_id)
 {
 	int rc = -1;
 	struct cam_dma_buff_info *mapping_info = NULL;
@@ -1886,7 +1847,7 @@ static int cam_smmu_map_buffer_and_add_to_list(int idx, int ion_fd,
 	buf = dma_buf_get(ion_fd);
 
 	rc = cam_smmu_map_buffer_validate(buf, idx, dma_dir, paddr_ptr, len_ptr,
-		region_id, dis_delayed_unmap, &mapping_info);
+		region_id, &mapping_info);
 
 	if (rc) {
 		CAM_ERR(CAM_SMMU, "buffer validation failure");
@@ -1910,7 +1871,7 @@ static int cam_smmu_map_kernel_buffer_and_add_to_list(int idx,
 	struct cam_dma_buff_info *mapping_info = NULL;
 
 	rc = cam_smmu_map_buffer_validate(buf, idx, dma_dir, paddr_ptr, len_ptr,
-		region_id, false, &mapping_info);
+		region_id, &mapping_info);
 
 	if (rc) {
 		CAM_ERR(CAM_SMMU, "buffer validation failure");
@@ -1947,17 +1908,12 @@ static int cam_smmu_unmap_buf_and_remove_from_list(
 		return -EINVAL;
 	}
 
-	CAM_DBG(CAM_SMMU,
-		"region_id=%d, paddr=%pK, len=%d, dma_map_attrs=%d",
-		mapping_info->region_id, mapping_info->paddr, mapping_info->len,
-		mapping_info->attach->dma_map_attrs);
-
 	if (mapping_info->region_id == CAM_SMMU_REGION_SHARED) {
 		CAM_DBG(CAM_SMMU,
 			"Removing SHARED buffer paddr = %pK, len = %zu",
 			(void *)mapping_info->paddr, mapping_info->len);
 
-		domain = iommu_cb_set.cb_info[idx].domain;
+		domain = iommu_cb_set.cb_info[idx].mapping->domain;
 
 		size = iommu_unmap(domain,
 			mapping_info->paddr,
@@ -1977,10 +1933,8 @@ static int cam_smmu_unmap_buf_and_remove_from_list(
 		if (rc)
 			CAM_ERR(CAM_SMMU, "IOVA free failed");
 
-		iommu_cb_set.cb_info[idx].shared_mapping_size -=
-			mapping_info->len;
 	} else if (mapping_info->region_id == CAM_SMMU_REGION_IO) {
-		iommu_cb_set.cb_info[idx].io_mapping_size -= mapping_info->len;
+		mapping_info->attach->dma_map_attrs |= DMA_ATTR_DELAYED_UNMAP;
 	}
 
 	dma_buf_unmap_attachment(mapping_info->attach,
@@ -2071,7 +2025,7 @@ static enum cam_smmu_buf_state cam_smmu_validate_secure_fd_in_list(int idx,
 
 int cam_smmu_get_handle(char *identifier, int *handle_ptr)
 {
-	int rc = 0;
+	int ret = 0;
 
 	if (!identifier) {
 		CAM_ERR(CAM_SMMU, "Error: iommu hardware name is NULL");
@@ -2084,12 +2038,11 @@ int cam_smmu_get_handle(char *identifier, int *handle_ptr)
 	}
 
 	/* create and put handle in the table */
-	rc = cam_smmu_create_add_handle_in_table(identifier, handle_ptr);
-	if (rc < 0)
-		CAM_ERR(CAM_SMMU, "Error: %s get handle fail, rc %d",
-			identifier, rc);
+	ret = cam_smmu_create_add_handle_in_table(identifier, handle_ptr);
+	if (ret < 0)
+		CAM_ERR(CAM_SMMU, "Error: %s get handle fail", identifier);
 
-	return rc;
+	return ret;
 }
 EXPORT_SYMBOL(cam_smmu_get_handle);
 
@@ -2188,7 +2141,7 @@ static int cam_smmu_alloc_scratch_buffer_add_to_list(int idx,
 
 
 	/* Get the domain from within our cb_set struct and map it*/
-	domain = iommu_cb_set.cb_info[idx].domain;
+	domain = iommu_cb_set.cb_info[idx].mapping->domain;
 
 	rc = cam_smmu_alloc_scratch_va(&iommu_cb_set.cb_info[idx].scratch_map,
 		virt_len, &iova);
@@ -2260,7 +2213,7 @@ static int cam_smmu_free_scratch_buffer_remove_from_list(
 	int rc = 0;
 	size_t unmapped;
 	struct iommu_domain *domain =
-		iommu_cb_set.cb_info[idx].domain;
+		iommu_cb_set.cb_info[idx].mapping->domain;
 	struct scratch_mapping *scratch_map =
 		&iommu_cb_set.cb_info[idx].scratch_map;
 
@@ -2362,7 +2315,7 @@ int cam_smmu_get_scratch_iova(int handle,
 	if (iommu_cb_set.cb_info[idx].state != CAM_SMMU_ATTACH) {
 		CAM_ERR(CAM_SMMU,
 			"Err:Dev %s should call SMMU attach before map buffer",
-			iommu_cb_set.cb_info[idx].name[0]);
+			iommu_cb_set.cb_info[idx].name);
 		rc = -EINVAL;
 		goto error;
 	}
@@ -2733,7 +2686,7 @@ static int cam_smmu_map_iova_validate_params(int handle,
 	return rc;
 }
 
-int cam_smmu_map_user_iova(int handle, int ion_fd, bool dis_delayed_unmap,
+int cam_smmu_map_user_iova(int handle, int ion_fd,
 	enum cam_smmu_map_dir dir, dma_addr_t *paddr_ptr,
 	size_t *len_ptr, enum cam_smmu_region_id region_id)
 {
@@ -2770,7 +2723,7 @@ int cam_smmu_map_user_iova(int handle, int ion_fd, bool dis_delayed_unmap,
 	if (iommu_cb_set.cb_info[idx].state != CAM_SMMU_ATTACH) {
 		CAM_ERR(CAM_SMMU,
 			"Err:Dev %s should call SMMU attach before map buffer",
-			iommu_cb_set.cb_info[idx].name[0]);
+			iommu_cb_set.cb_info[idx].name);
 		rc = -EINVAL;
 		goto get_addr_end;
 	}
@@ -2784,14 +2737,12 @@ int cam_smmu_map_user_iova(int handle, int ion_fd, bool dis_delayed_unmap,
 		goto get_addr_end;
 	}
 
-	rc = cam_smmu_map_buffer_and_add_to_list(idx, ion_fd,
-		dis_delayed_unmap, dma_dir, paddr_ptr, len_ptr, region_id);
-	if (rc < 0) {
+	rc = cam_smmu_map_buffer_and_add_to_list(idx, ion_fd, dma_dir,
+			paddr_ptr, len_ptr, region_id);
+	if (rc < 0)
 		CAM_ERR(CAM_SMMU,
 			"mapping or add list fail, idx=%d, fd=%d, region=%d, rc=%d",
 			idx, ion_fd, region_id, rc);
-		cam_smmu_dump_cb_info(idx);
-	}
 
 get_addr_end:
 	mutex_unlock(&iommu_cb_set.cb_info[idx].lock);
@@ -2834,7 +2785,7 @@ int cam_smmu_map_kernel_iova(int handle, struct dma_buf *buf,
 	if (iommu_cb_set.cb_info[idx].state != CAM_SMMU_ATTACH) {
 		CAM_ERR(CAM_SMMU,
 			"Err:Dev %s should call SMMU attach before map buffer",
-			iommu_cb_set.cb_info[idx].name[0]);
+			iommu_cb_set.cb_info[idx].name);
 		rc = -EINVAL;
 		goto get_addr_end;
 	}
@@ -3173,7 +3124,7 @@ int cam_smmu_destroy_handle(int handle)
 
 	if (!list_empty_careful(&iommu_cb_set.cb_info[idx].smmu_buf_list)) {
 		CAM_ERR(CAM_SMMU, "UMD %s buffer list is not clean",
-			iommu_cb_set.cb_info[idx].name[0]);
+			iommu_cb_set.cb_info[idx].name);
 		cam_smmu_print_user_list(idx);
 		cam_smmu_clean_user_buffer_list(idx);
 	}
@@ -3181,7 +3132,7 @@ int cam_smmu_destroy_handle(int handle)
 	if (!list_empty_careful(
 		&iommu_cb_set.cb_info[idx].smmu_buf_kernel_list)) {
 		CAM_ERR(CAM_SMMU, "KMD %s buffer list is not clean",
-			iommu_cb_set.cb_info[idx].name[0]);
+			iommu_cb_set.cb_info[idx].name);
 		cam_smmu_print_kernel_list(idx);
 		cam_smmu_clean_kernel_buffer_list(idx);
 	}
@@ -3202,19 +3153,6 @@ int cam_smmu_destroy_handle(int handle)
 		return 0;
 	}
 
-	if (iommu_cb_set.cb_info[idx].is_mul_client &&
-		iommu_cb_set.cb_info[idx].device_count) {
-		iommu_cb_set.cb_info[idx].device_count--;
-
-		if (!iommu_cb_set.cb_info[idx].device_count) {
-			iommu_cb_set.cb_info[idx].cb_count = 0;
-			iommu_cb_set.cb_info[idx].handle = HANDLE_INIT;
-		}
-		mutex_unlock(&iommu_cb_set.cb_info[idx].lock);
-		return 0;
-	}
-
-	iommu_cb_set.cb_info[idx].device_count = 0;
 	iommu_cb_set.cb_info[idx].cb_count = 0;
 	iommu_cb_set.cb_info[idx].handle = HANDLE_INIT;
 	mutex_unlock(&iommu_cb_set.cb_info[idx].lock);
@@ -3224,8 +3162,12 @@ EXPORT_SYMBOL(cam_smmu_destroy_handle);
 
 static void cam_smmu_deinit_cb(struct cam_context_bank_info *cb)
 {
-	if (cb->io_support && cb->domain)
-		cb->domain = NULL;
+	arm_iommu_detach_device(cb->dev);
+
+	if (cb->io_support && cb->mapping) {
+		arm_iommu_release_mapping(cb->mapping);
+		cb->mapping = NULL;
+	}
 
 	if (cb->shared_support) {
 		gen_pool_destroy(cb->shared_mem_pool);
@@ -3304,13 +3246,22 @@ static int cam_smmu_setup_cb(struct cam_context_bank_info *cb,
 
 	/* create a virtual mapping */
 	if (cb->io_support) {
-		cb->domain = iommu_get_domain_for_dev(dev);
-		if (IS_ERR(cb->domain)) {
-			CAM_ERR(CAM_SMMU, "Error: create domain Failed");
+		cb->mapping = arm_iommu_create_mapping(&platform_bus_type,
+			cb->io_info.iova_start, cb->io_info.iova_len);
+		if (IS_ERR(cb->mapping)) {
+			CAM_ERR(CAM_SMMU, "Error: create mapping Failed");
 			rc = -ENODEV;
 			goto end;
 		}
-		cb->state = CAM_SMMU_ATTACH;
+
+		iommu_cb_set.non_fatal_fault = smmu_fatal_flag;
+		if (iommu_domain_set_attr(cb->mapping->domain,
+			DOMAIN_ATTR_NON_FATAL_FAULTS,
+			&iommu_cb_set.non_fatal_fault) < 0) {
+			CAM_ERR(CAM_SMMU,
+				"Error: failed to set non fatal fault attribute");
+		}
+
 	} else {
 		CAM_ERR(CAM_SMMU, "Context bank does not have IO region");
 		rc = -ENODEV;
@@ -3492,7 +3443,7 @@ static int cam_smmu_get_memory_regions_info(struct device_node *of_node,
 				region_id);
 		}
 
-		CAM_DBG(CAM_SMMU, "Found label -> %s", cb->name[0]);
+		CAM_DBG(CAM_SMMU, "Found label -> %s", cb->name);
 		CAM_DBG(CAM_SMMU, "Found region -> %s", region_name);
 		CAM_DBG(CAM_SMMU, "region_start -> %X", region_start);
 		CAM_DBG(CAM_SMMU, "region_len -> %X", region_len);
@@ -3515,7 +3466,6 @@ static int cam_populate_smmu_context_banks(struct device *dev,
 	int rc = 0;
 	struct cam_context_bank_info *cb;
 	struct device *ctx = NULL;
-	int i = 0;
 
 	if (!dev) {
 		CAM_ERR(CAM_SMMU, "Error: Invalid device");
@@ -3532,24 +3482,8 @@ static int cam_populate_smmu_context_banks(struct device *dev,
 	/* read the context bank from cb set */
 	cb = &iommu_cb_set.cb_info[iommu_cb_set.cb_init_count];
 
-	cb->is_mul_client =
-		of_property_read_bool(dev->of_node, "multiple-client-devices");
-
-	cb->num_shared_hdl = of_property_count_strings(dev->of_node,
-		"label");
-
-	if (cb->num_shared_hdl >
-		CAM_SMMU_SHARED_HDL_MAX) {
-		CAM_ERR(CAM_CDM, "Invalid count of client names count=%d",
-			cb->num_shared_hdl);
-		rc = -EINVAL;
-		return rc;
-	}
-
 	/* set the name of the context bank */
-	for (i = 0; i < cb->num_shared_hdl; i++)
-		rc = of_property_read_string_index(dev->of_node,
-		"label", i, &cb->name[i]);
+	rc = of_property_read_string(dev->of_node, "label", &cb->name);
 	if (rc < 0) {
 		CAM_ERR(CAM_SMMU,
 			"Error: failed to read label from sub device");
@@ -3573,249 +3507,92 @@ static int cam_populate_smmu_context_banks(struct device *dev,
 	/* set up the iommu mapping for the  context bank */
 	if (type == CAM_QSMMU) {
 		CAM_ERR(CAM_SMMU, "Error: QSMMU ctx not supported for : %s",
-			cb->name[0]);
+			cb->name);
 		return -ENODEV;
 	}
 
 	ctx = dev;
-	CAM_DBG(CAM_SMMU, "getting Arm SMMU ctx : %s", cb->name[0]);
+	CAM_DBG(CAM_SMMU, "getting Arm SMMU ctx : %s", cb->name);
 
 	rc = cam_smmu_setup_cb(cb, ctx);
 	if (rc < 0) {
-		CAM_ERR(CAM_SMMU, "Error: failed to setup cb : %s",
-			cb->name[0]);
+		CAM_ERR(CAM_SMMU, "Error: failed to setup cb : %s", cb->name);
 		goto cb_init_fail;
 	}
-	if (cb->io_support && cb->domain)
-		iommu_set_fault_handler(cb->domain,
+	if (cb->io_support && cb->mapping)
+		iommu_set_fault_handler(cb->mapping->domain,
 			cam_smmu_iommu_fault_handler,
-			(void *)cb->name[0]);
-
-	if (!dev->dma_parms)
-		dev->dma_parms = devm_kzalloc(dev,
-			sizeof(*dev->dma_parms), GFP_KERNEL);
-
-	if (!dev->dma_parms) {
-		CAM_WARN(CAM_SMMU,
-			"Failed to allocate dma_params");
-		dev->dma_parms = NULL;
-		goto end;
-	}
-
-	dma_set_max_seg_size(dev, DMA_BIT_MASK(32));
-	dma_set_seg_boundary(dev, (unsigned long)DMA_BIT_MASK(64));
-
-end:
+			(void *)cb->name);
 	/* increment count to next bank */
 	iommu_cb_set.cb_init_count++;
+
 	CAM_DBG(CAM_SMMU, "X: cb init count :%d", iommu_cb_set.cb_init_count);
 
 cb_init_fail:
 	return rc;
 }
 
-static int cam_smmu_create_debug_fs(void)
-{
-	iommu_cb_set.dentry = debugfs_create_dir("camera_smmu",
-		NULL);
-
-	if (!iommu_cb_set.dentry) {
-		CAM_ERR(CAM_SMMU, "failed to create dentry");
-		return -ENOMEM;
-	}
-
-	if (!debugfs_create_bool("cb_dump_enable",
-		0644,
-		iommu_cb_set.dentry,
-		&iommu_cb_set.cb_dump_enable)) {
-		CAM_ERR(CAM_SMMU,
-			"failed to create dump_enable_debug");
-		goto err;
-	}
-
-	return 0;
-err:
-	debugfs_remove_recursive(iommu_cb_set.dentry);
-	return -ENOMEM;
-}
-
-static int cam_smmu_fw_dev_component_bind(struct device *dev,
-	struct device *master_dev, void *data)
-{
-	struct platform_device *pdev = to_platform_device(dev);
-
-	icp_fw.fw_dev = &pdev->dev;
-	icp_fw.fw_kva = NULL;
-	icp_fw.fw_hdl = 0;
-
-	CAM_DBG(CAM_SMMU, "FW dev component bound successfully");
-	return 0;
-}
-
-static void cam_smmu_fw_dev_component_unbind(struct device *dev,
-	struct device *master_dev, void *data)
-{
-	struct platform_device *pdev = to_platform_device(dev);
-
-	CAM_DBG(CAM_SMMU, "Unbinding component: %s", pdev->name);
-}
-
-const static struct component_ops cam_smmu_fw_dev_component_ops = {
-	.bind = cam_smmu_fw_dev_component_bind,
-	.unbind = cam_smmu_fw_dev_component_unbind,
-};
-
-static int cam_smmu_cb_component_bind(struct device *dev,
-	struct device *master_dev, void *data)
-{
-	int rc = 0;
-	struct platform_device *pdev = to_platform_device(dev);
-
-	rc = cam_populate_smmu_context_banks(dev, CAM_ARM_SMMU);
-	if (rc < 0) {
-		CAM_ERR(CAM_SMMU, "Error: populating context banks");
-		cam_smmu_release_cb(pdev);
-		return -ENOMEM;
-	}
-
-	CAM_DBG(CAM_SMMU, "CB component bound successfully");
-	return 0;
-}
-
-static void cam_smmu_cb_component_unbind(struct device *dev,
-	struct device *master_dev, void *data)
-{
-	struct platform_device *pdev = to_platform_device(dev);
-
-	CAM_DBG(CAM_SMMU, "Unbinding component: %s", pdev->name);
-}
-
-const static struct component_ops cam_smmu_cb_component_ops = {
-	.bind = cam_smmu_cb_component_bind,
-	.unbind = cam_smmu_cb_component_unbind,
-};
-
-static int cam_smmu_cb_qsmmu_component_bind(struct device *dev,
-	struct device *master_dev, void *data)
-{
-	int rc = 0;
-
-	rc = cam_populate_smmu_context_banks(dev, CAM_QSMMU);
-	if (rc < 0) {
-		CAM_ERR(CAM_SMMU, "Failed in populating context banks");
-		return -ENOMEM;
-	}
-
-	CAM_DBG(CAM_SMMU, "QSMMU CB component bound successfully");
-	return 0;
-}
-
-static void cam_smmu_cb_qsmmu_component_unbind(struct device *dev,
-	struct device *master_dev, void *data)
-{
-	struct platform_device *pdev = to_platform_device(dev);
-
-	CAM_DBG(CAM_SMMU, "Unbinding component: %s", pdev->name);
-}
-
-const static struct component_ops cam_smmu_cb_qsmmu_component_ops = {
-	.bind = cam_smmu_cb_qsmmu_component_bind,
-	.unbind = cam_smmu_cb_qsmmu_component_unbind,
-};
-
-static int cam_smmu_component_bind(struct device *dev,
-	struct device *master_dev, void *data)
-{
-	INIT_WORK(&iommu_cb_set.smmu_work, cam_smmu_page_fault_work);
-	mutex_init(&iommu_cb_set.payload_list_lock);
-	INIT_LIST_HEAD(&iommu_cb_set.payload_list);
-	cam_smmu_create_debug_fs();
-
-	CAM_DBG(CAM_SMMU, "Main component bound successfully");
-	return 0;
-}
-
-static void cam_smmu_component_unbind(struct device *dev,
-	struct device *master_dev, void *data)
-{
-	struct platform_device *pdev = to_platform_device(dev);
-
-	/* release all the context banks and memory allocated */
-	cam_smmu_reset_iommu_table(CAM_SMMU_TABLE_DEINIT);
-	if (dev && dev->dma_parms) {
-		devm_kfree(dev, dev->dma_parms);
-		dev->dma_parms = NULL;
-	}
-
-	cam_smmu_release_cb(pdev);
-	debugfs_remove_recursive(iommu_cb_set.dentry);
-	iommu_cb_set.dentry = NULL;
-}
-
-const static struct component_ops cam_smmu_component_ops = {
-	.bind = cam_smmu_component_bind,
-	.unbind = cam_smmu_component_unbind,
-};
-
 static int cam_smmu_probe(struct platform_device *pdev)
 {
 	int rc = 0;
 	struct device *dev = &pdev->dev;
 
-	dev->dma_parms = NULL;
-	CAM_DBG(CAM_SMMU, "Adding SMMU component: %s", pdev->name);
 	if (of_device_is_compatible(dev->of_node, "qcom,msm-cam-smmu")) {
 		rc = cam_alloc_smmu_context_banks(dev);
 		if (rc < 0) {
-			CAM_ERR(CAM_SMMU, "Failed in allocating context banks");
+			CAM_ERR(CAM_SMMU, "Error: allocating context banks");
 			return -ENOMEM;
 		}
-
-		rc = component_add(&pdev->dev, &cam_smmu_component_ops);
-	} else if (of_device_is_compatible(dev->of_node,
-		"qcom,msm-cam-smmu-cb")) {
-		rc = component_add(&pdev->dev, &cam_smmu_cb_component_ops);
-	} else if (of_device_is_compatible(dev->of_node, "qcom,qsmmu-cam-cb")) {
-		rc = component_add(&pdev->dev,
-			&cam_smmu_cb_qsmmu_component_ops);
-	} else if (of_device_is_compatible(dev->of_node,
-		"qcom,msm-cam-smmu-fw-dev")) {
-		rc = component_add(&pdev->dev, &cam_smmu_fw_dev_component_ops);
-	} else {
-		CAM_ERR(CAM_SMMU, "Unrecognized child device: %s", pdev->name);
-		rc = -ENODEV;
+	}
+	if (of_device_is_compatible(dev->of_node, "qcom,msm-cam-smmu-cb")) {
+		rc = cam_populate_smmu_context_banks(dev, CAM_ARM_SMMU);
+		if (rc < 0) {
+			CAM_ERR(CAM_SMMU, "Error: populating context banks");
+			cam_smmu_release_cb(pdev);
+			return -ENOMEM;
+		}
+		return rc;
+	}
+	if (of_device_is_compatible(dev->of_node, "qcom,qsmmu-cam-cb")) {
+		rc = cam_populate_smmu_context_banks(dev, CAM_QSMMU);
+		if (rc < 0) {
+			CAM_ERR(CAM_SMMU, "Error: populating context banks");
+			return -ENOMEM;
+		}
+		return rc;
 	}
 
-	if (rc < 0)
-		CAM_ERR(CAM_SMMU, "failed to add component rc: %d", rc);
+	if (of_device_is_compatible(dev->of_node, "qcom,msm-cam-smmu-fw-dev")) {
+		icp_fw.fw_dev = &pdev->dev;
+		icp_fw.fw_kva = NULL;
+		icp_fw.fw_dma_hdl = 0;
+		return rc;
+	}
+
+	/* probe through all the subdevices */
+	rc = of_platform_populate(pdev->dev.of_node, msm_cam_smmu_dt_match,
+				NULL, &pdev->dev);
+	if (rc < 0) {
+		CAM_ERR(CAM_SMMU, "Error: populating devices");
+	} else {
+		INIT_WORK(&iommu_cb_set.smmu_work, cam_smmu_page_fault_work);
+		mutex_init(&iommu_cb_set.payload_list_lock);
+		INIT_LIST_HEAD(&iommu_cb_set.payload_list);
+	}
 
 	return rc;
 }
 
 static int cam_smmu_remove(struct platform_device *pdev)
 {
-	struct device *dev = &pdev->dev;
-
-	CAM_DBG(CAM_SMMU, "Removing SMMU component: %s", pdev->name);
-	if (of_device_is_compatible(dev->of_node, "qcom,msm-cam-smmu")) {
-		component_del(&pdev->dev, &cam_smmu_component_ops);
-	} else if (of_device_is_compatible(dev->of_node,
-		"qcom,msm-cam-smmu-cb")) {
-		component_del(&pdev->dev, &cam_smmu_cb_component_ops);
-	} else if (of_device_is_compatible(dev->of_node, "qcom,qsmmu-cam-cb")) {
-		component_del(&pdev->dev, &cam_smmu_cb_qsmmu_component_ops);
-	} else if (of_device_is_compatible(dev->of_node,
-		"qcom,msm-cam-smmu-fw-dev")) {
-		component_del(&pdev->dev, &cam_smmu_fw_dev_component_ops);
-	} else {
-		CAM_ERR(CAM_SMMU, "Unrecognized child device: %s", pdev->name);
-		return -ENODEV;
-	}
-
+	/* release all the context banks and memory allocated */
+	cam_smmu_reset_iommu_table(CAM_SMMU_TABLE_DEINIT);
+	if (of_device_is_compatible(pdev->dev.of_node, "qcom,msm-cam-smmu"))
+		cam_smmu_release_cb(pdev);
 	return 0;
 }
 
-struct platform_driver cam_smmu_driver = {
+static struct platform_driver cam_smmu_driver = {
 	.probe = cam_smmu_probe,
 	.remove = cam_smmu_remove,
 	.driver = {
@@ -3826,15 +3603,18 @@ struct platform_driver cam_smmu_driver = {
 	},
 };
 
-int cam_smmu_init_module(void)
+static int __init cam_smmu_init_module(void)
 {
+	cam_smmu_create_debugfs_entry();
 	return platform_driver_register(&cam_smmu_driver);
 }
 
-void cam_smmu_exit_module(void)
+static void __exit cam_smmu_exit_module(void)
 {
 	platform_driver_unregister(&cam_smmu_driver);
 }
 
+module_init(cam_smmu_init_module);
+module_exit(cam_smmu_exit_module);
 MODULE_DESCRIPTION("MSM Camera SMMU driver");
 MODULE_LICENSE("GPL v2");

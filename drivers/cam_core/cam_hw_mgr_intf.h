@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _CAM_HW_MGR_INTF_H_
@@ -8,7 +15,7 @@
 
 #include <linux/time.h>
 #include <linux/types.h>
-#include <media/cam_defs.h>
+
 /*
  * This file declares Constants, Enums, Structures and APIs to be used as
  * Interface between HW Manager and Context.
@@ -16,24 +23,10 @@
 
 
 /* maximum context numbers */
-#define CAM_CTX_MAX                         8
+#define CAM_CTX_MAX                         32
 
 /* maximum buf done irqs */
 #define CAM_NUM_OUT_PER_COMP_IRQ_MAX        12
-
-/* Maximum reg dump cmd buffer entries in a context */
-#define CAM_REG_DUMP_MAX_BUF_ENTRIES        10
-
-/**
- * enum cam_context_dump_id -
- *              context dump type
- *
- */
-enum cam_context_dump_id {
-	CAM_CTX_DUMP_TYPE_NONE,
-	CAM_CTX_DUMP_ACQ_INFO,
-	CAM_CTX_DUMP_TYPE_MAX,
-};
 
 /* hardware event callback function type */
 typedef int (*cam_hw_event_cb_func)(void *context, uint32_t evt_id,
@@ -42,10 +35,6 @@ typedef int (*cam_hw_event_cb_func)(void *context, uint32_t evt_id,
 /* hardware page fault callback function type */
 typedef int (*cam_hw_pagefault_cb_func)(void *context, unsigned long iova,
 	uint32_t buf_info);
-
-/* ctx dump callback function type */
-typedef int (*cam_ctx_info_dump_cb_func)(void *context,
-	enum cam_context_dump_id dump_id);
 
 /**
  * struct cam_hw_update_entry - Entry for hardware config
@@ -101,13 +90,6 @@ struct cam_hw_done_event_data {
  * @num_acq:               Total number of acquire in the payload
  * @acquire_info:          Acquired resource array pointer
  * @ctxt_to_hw_map:        HW context (returned)
- * @custom_enabled:        ctx has custom enabled
- * @use_frame_header_ts:   Use frame header for qtimer ts
- * @acquired_hw_id:        Acquired hardware mask
- * @acquired_hw_path:      Acquired path mask for an input
- *                         if input splits into multiple paths,
- *                         its updated per hardware
- * valid_acquired_hw:      Valid num of acquired hardware
  *
  */
 struct cam_hw_acquire_args {
@@ -117,12 +99,6 @@ struct cam_hw_acquire_args {
 	uint32_t                     acquire_info_size;
 	uintptr_t                    acquire_info;
 	void                        *ctxt_to_hw_map;
-	bool                         custom_enabled;
-	bool                         use_frame_header_ts;
-
-	uint32_t    acquired_hw_id[CAM_MAX_ACQ_RES];
-	uint32_t    acquired_hw_path[CAM_MAX_ACQ_RES][CAM_MAX_HW_SPLIT];
-	uint32_t    valid_acquired_hw;
 };
 
 /**
@@ -168,9 +144,11 @@ struct cam_hw_stop_args {
  * struct cam_hw_mgr_dump_pf_data - page fault debug data
  *
  * packet:     pointer to packet
+ * ctx_id:     context id
  */
 struct cam_hw_mgr_dump_pf_data {
 	void    *packet;
+	uint32_t ctx_id;
 };
 
 /**
@@ -188,8 +166,6 @@ struct cam_hw_mgr_dump_pf_data {
  * @max_in_map_entries:    Maximum input fence mapping supported
  * @in_map_entries:        Actual input fence mapping list (returned)
  * @num_in_map_entries:    Number of acutal input fence mapping (returned)
- * @reg_dump_buf_desc:     cmd buffer descriptors for reg dump
- * @num_reg_dump_buf:      Count of descriptors in reg_dump_buf_desc
  * @priv:                  Private pointer of hw update
  * @pf_data:               Debug data for page fault
  *
@@ -207,9 +183,6 @@ struct cam_hw_prepare_update_args {
 	uint32_t                        max_in_map_entries;
 	struct cam_hw_fence_map_entry  *in_map_entries;
 	uint32_t                        num_in_map_entries;
-	struct cam_cmd_buf_desc         reg_dump_buf_desc[
-					CAM_REG_DUMP_MAX_BUF_ENTRIES];
-	uint32_t                        num_reg_dump_buf;
 	void                           *priv;
 	struct cam_hw_mgr_dump_pf_data *pf_data;
 };
@@ -262,8 +235,6 @@ struct cam_hw_config_args {
  * @num_req_active:        Num request to flush, valid when flush type is REQ
  * @flush_req_active:      Request active pointers to flush
  * @flush_type:            The flush type
- * @last_flush_req:        last flush req_id notified to hw_mgr for the
- *                         given stream
  *
  */
 struct cam_hw_flush_args {
@@ -273,7 +244,6 @@ struct cam_hw_flush_args {
 	uint32_t                        num_req_active;
 	void                           *flush_req_active[20];
 	enum flush_type_t               flush_type;
-	uint32_t                        last_flush_req;
 };
 
 /**
@@ -308,16 +278,14 @@ struct cam_hw_reset_args {
  * struct cam_hw_dump_args - Dump arguments
  *
  * @request_id:            request_id
- * @offset:                Buffer offset. This is updated by the drivers.
  * @buf_handle:            Buffer handle
- * @error_type:            Error type, to be used to extend dump information
+ * @offset:                Buffer offset. This is updated by the drivers.
  * @ctxt_to_hw_map:        HW context from the acquire
  */
 struct cam_hw_dump_args {
 	uint64_t          request_id;
-	size_t            offset;
 	uint32_t          buf_handle;
-	uint32_t          error_type;
+	int32_t           offset;
 	void             *ctxt_to_hw_map;
 };
 
@@ -325,9 +293,6 @@ struct cam_hw_dump_args {
 enum cam_hw_mgr_command {
 	CAM_HW_MGR_CMD_INTERNAL,
 	CAM_HW_MGR_CMD_DUMP_PF_INFO,
-	CAM_HW_MGR_CMD_REG_DUMP_ON_FLUSH,
-	CAM_HW_MGR_CMD_REG_DUMP_ON_ERROR,
-	CAM_HW_MGR_CMD_DUMP_ACQ_INFO,
 };
 
 /**

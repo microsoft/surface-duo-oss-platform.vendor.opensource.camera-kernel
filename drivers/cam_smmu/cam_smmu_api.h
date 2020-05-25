@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _CAM_SMMU_API_H_
@@ -9,6 +16,7 @@
 #include <linux/dma-direction.h>
 #include <linux/module.h>
 #include <linux/dma-buf.h>
+#include <asm/dma-iommu.h>
 #include <linux/dma-direction.h>
 #include <linux/of_platform.h>
 #include <linux/iommu.h>
@@ -98,8 +106,6 @@ int cam_smmu_ops(int handle, enum cam_smmu_ops_param op);
  *
  * @param handle: Handle to identify the CAM SMMU client (VFE, CPP, FD etc.)
  * @param ion_fd: ION handle identifying the memory buffer.
- * @param dis_delayed_unmap: Whether to disable Delayed Unmap feature
- *                           for this mapping
  * @dir         : Mapping direction: which will traslate toDMA_BIDIRECTIONAL,
  *                DMA_TO_DEVICE or DMA_FROM_DEVICE
  * @dma_addr    : Pointer to physical address where mapped address will be
@@ -109,8 +115,9 @@ int cam_smmu_ops(int handle, enum cam_smmu_ops_param op);
  * @len_ptr     : Length of buffer mapped returned by CAM SMMU driver.
  * @return Status of operation. Negative in case of error. Zero otherwise.
  */
-int cam_smmu_map_user_iova(int handle, int ion_fd, bool dis_delayed_unmap,
-	enum cam_smmu_map_dir dir, dma_addr_t *dma_addr, size_t *len_ptr,
+int cam_smmu_map_user_iova(int handle,
+	int ion_fd, enum cam_smmu_map_dir dir,
+	dma_addr_t *dma_addr, size_t *len_ptr,
 	enum cam_smmu_region_id region_id);
 
 /**
@@ -393,14 +400,4 @@ int cam_smmu_dealloc_qdss(int32_t smmu_hdl);
 int cam_smmu_get_io_region_info(int32_t smmu_hdl,
 	dma_addr_t *iova, size_t *len);
 
-/**
- * @brief : API to register SMMU hw to platform framework.
- * @return struct platform_device pointer on on success, or ERR_PTR() on error.
- */
-int cam_smmu_init_module(void);
-
-/**
- * @brief : API to remove SMMU Hw from platform framework.
- */
-void cam_smmu_exit_module(void);
 #endif /* _CAM_SMMU_API_H_ */

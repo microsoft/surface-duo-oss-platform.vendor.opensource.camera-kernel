@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef __CAM_SYNC_API_H__
@@ -10,7 +17,7 @@
 #include <linux/list.h>
 #include <linux/completion.h>
 #include <linux/videodev2.h>
-#include <media/cam_sync.h>
+#include <uapi/media/cam_sync.h>
 
 #define SYNC_DEBUG_NAME_LEN 63
 typedef void (*sync_callback)(int32_t sync_obj, int status, void *data);
@@ -33,7 +40,7 @@ typedef void (*sync_callback)(int32_t sync_obj, int status, void *data);
  * -ENOMEM will be returned if the kernel can't allocate space for
  * sync object.
  */
-int cam_sync_create(int32_t *sync_obj, const char *name);
+int cam_sync_create(int32_t *sync_obj, const char *name, uint32_t client_id);
 
 /**
  * @brief: Registers a callback with a sync object
@@ -150,14 +157,4 @@ int cam_sync_wait(int32_t sync_obj, uint64_t timeout_ms);
  */
 int cam_sync_check_valid(int32_t sync_obj);
 
-/**
- * @brief : API to register SYNC to platform framework.
- * @return struct platform_device pointer on on success, or ERR_PTR() on error.
- */
-int cam_sync_init(void);
-
-/**
- * @brief : API to remove SYNC from platform framework.
- */
-void cam_sync_exit(void);
 #endif /* __CAM_SYNC_API_H__ */

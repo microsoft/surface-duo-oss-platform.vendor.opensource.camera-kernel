@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _CAM_SENSOR_I2C_H_
@@ -8,6 +15,7 @@
 
 #include <linux/delay.h>
 #include <media/v4l2-subdev.h>
+#include <media/cam_sensor.h>
 #include <media/cam_sensor.h>
 #include "cam_cci_dev.h"
 #include "cam_sensor_io.h"
@@ -18,7 +26,7 @@
 #define I2C_COMPARE_MATCH 0
 #define I2C_COMPARE_MISMATCH 1
 
-#define I2C_REG_DATA_MAX (10*1024)
+#define I2C_REG_DATA_MAX       (8*1024)
 
 /**
  * @client: CCI client structure
@@ -56,7 +64,7 @@ int32_t cam_camera_cci_i2c_read_seq(struct cam_sensor_cci_client *client,
  * This API handles CCI random write
  */
 int32_t cam_cci_i2c_write_table(
-	struct camera_io_master *client,
+	struct cam_sensor_cci_client *client,
 	struct cam_sensor_i2c_reg_setting *write_setting);
 
 /**
@@ -67,7 +75,7 @@ int32_t cam_cci_i2c_write_table(
  * This API handles CCI continuous write
  */
 int32_t cam_cci_i2c_write_continuous_table(
-	struct camera_io_master *client,
+	struct cam_sensor_cci_client *client,
 	struct cam_sensor_i2c_reg_setting *write_setting,
 	uint8_t cam_sensor_i2c_write_flag);
 

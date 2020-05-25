@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include "cam_eeprom_dev.h"
@@ -8,7 +15,6 @@
 #include "cam_eeprom_soc.h"
 #include "cam_eeprom_core.h"
 #include "cam_debug_util.h"
-#include "camera_main.h"
 
 static long cam_eeprom_subdev_ioctl(struct v4l2_subdev *sd,
 	unsigned int cmd, void *arg)
@@ -66,9 +72,6 @@ int32_t cam_eeprom_update_i2c_info(struct cam_eeprom_ctrl_t *e_ctrl,
 	} else if (e_ctrl->io_master_info.master_type == I2C_MASTER) {
 		e_ctrl->io_master_info.client->addr = i2c_info->slave_addr;
 		CAM_DBG(CAM_EEPROM, "Slave addr: 0x%x", i2c_info->slave_addr);
-	} else if (e_ctrl->io_master_info.master_type == SPI_MASTER) {
-		CAM_ERR(CAM_EEPROM, "Slave addr: 0x%x Freq Mode: %d",
-		i2c_info->slave_addr, i2c_info->i2c_freq_mode);
 	}
 	return 0;
 }
@@ -182,7 +185,6 @@ static int cam_eeprom_i2c_driver_probe(struct i2c_client *client,
 
 	mutex_init(&(e_ctrl->eeprom_mutex));
 
-	INIT_LIST_HEAD(&(e_ctrl->wr_settings.list_head));
 	soc_info = &e_ctrl->soc_info;
 	soc_info->dev = &client->dev;
 	soc_info->dev_name = client->name;
@@ -308,7 +310,7 @@ static int cam_eeprom_spi_setup(struct spi_device *spi)
 	e_ctrl->io_master_info.spi_client = spi_client;
 	e_ctrl->io_master_info.master_type = SPI_MASTER;
 	spi_client->spi_master = spi;
-	INIT_LIST_HEAD(&(e_ctrl->wr_settings.list_head));
+
 	power_info = &eb_info->power_info;
 	power_info->dev = &spi->dev;
 
@@ -319,7 +321,6 @@ static int cam_eeprom_spi_setup(struct spi_device *spi)
 	/* Initialize mutex */
 	mutex_init(&(e_ctrl->eeprom_mutex));
 
-	e_ctrl->bridge_intf.device_hdl = -1;
 	rc = cam_eeprom_parse_dt(e_ctrl);
 	if (rc) {
 		CAM_ERR(CAM_EEPROM, "failed: spi soc init rc %d", rc);
@@ -336,6 +337,7 @@ static int cam_eeprom_spi_setup(struct spi_device *spi)
 	if (rc)
 		goto board_free;
 
+	e_ctrl->bridge_intf.device_hdl = -1;
 	e_ctrl->bridge_intf.ops.get_dev_info = NULL;
 	e_ctrl->bridge_intf.ops.link_setup = NULL;
 	e_ctrl->bridge_intf.ops.apply_req = NULL;
@@ -410,13 +412,12 @@ static int cam_eeprom_spi_driver_remove(struct spi_device *sdev)
 	return 0;
 }
 
-static int cam_eeprom_component_bind(struct device *dev,
-	struct device *master_dev, void *data)
+static int32_t cam_eeprom_platform_driver_probe(
+	struct platform_device *pdev)
 {
 	int32_t                         rc = 0;
 	struct cam_eeprom_ctrl_t       *e_ctrl = NULL;
 	struct cam_eeprom_soc_private  *soc_private = NULL;
-	struct platform_device *pdev = to_platform_device(dev);
 
 	e_ctrl = kzalloc(sizeof(struct cam_eeprom_ctrl_t), GFP_KERNEL);
 	if (!e_ctrl)
@@ -460,7 +461,6 @@ static int cam_eeprom_component_bind(struct device *dev,
 		goto free_soc;
 	}
 
-	INIT_LIST_HEAD(&(e_ctrl->wr_settings.list_head));
 	rc = cam_eeprom_init_subdev(e_ctrl);
 	if (rc)
 		goto free_soc;
@@ -471,7 +471,6 @@ static int cam_eeprom_component_bind(struct device *dev,
 	e_ctrl->bridge_intf.ops.apply_req = NULL;
 	platform_set_drvdata(pdev, e_ctrl);
 	e_ctrl->cam_eeprom_state = CAM_EEPROM_INIT;
-	CAM_DBG(CAM_EEPROM, "Component bound successfully");
 
 	return rc;
 free_soc:
@@ -484,21 +483,19 @@ free_e_ctrl:
 	return rc;
 }
 
-static void cam_eeprom_component_unbind(struct device *dev,
-	struct device *master_dev, void *data)
+static int cam_eeprom_platform_driver_remove(struct platform_device *pdev)
 {
 	int                        i;
 	struct cam_eeprom_ctrl_t  *e_ctrl;
 	struct cam_hw_soc_info    *soc_info;
-	struct platform_device *pdev = to_platform_device(dev);
 
 	e_ctrl = platform_get_drvdata(pdev);
 	if (!e_ctrl) {
 		CAM_ERR(CAM_EEPROM, "eeprom device is NULL");
-		return;
+		return -EINVAL;
 	}
 
-	CAM_DBG(CAM_EEPROM, "Component unbind called for: %s", pdev->name);
+	CAM_INFO(CAM_EEPROM, "Platform driver remove invoked");
 	soc_info = &e_ctrl->soc_info;
 
 	for (i = 0; i < soc_info->num_clk; i++)
@@ -514,29 +511,7 @@ static void cam_eeprom_component_unbind(struct device *dev,
 	platform_set_drvdata(pdev, NULL);
 	v4l2_set_subdevdata(&e_ctrl->v4l2_dev_str.sd, NULL);
 	kfree(e_ctrl);
-}
 
-const static struct component_ops cam_eeprom_component_ops = {
-	.bind = cam_eeprom_component_bind,
-	.unbind = cam_eeprom_component_unbind,
-};
-
-static int32_t cam_eeprom_platform_driver_probe(
-	struct platform_device *pdev)
-{
-	int rc = 0;
-
-	CAM_DBG(CAM_EEPROM, "Adding EEPROM Sensor component");
-	rc = component_add(&pdev->dev, &cam_eeprom_component_ops);
-	if (rc)
-		CAM_ERR(CAM_EEPROM, "failed to add component rc: %d", rc);
-
-	return rc;
-}
-
-static int cam_eeprom_platform_driver_remove(struct platform_device *pdev)
-{
-	component_del(&pdev->dev, &cam_eeprom_component_ops);
 	return 0;
 }
 
@@ -548,7 +523,7 @@ static const struct of_device_id cam_eeprom_dt_match[] = {
 
 MODULE_DEVICE_TABLE(of, cam_eeprom_dt_match);
 
-struct platform_driver cam_eeprom_platform_driver = {
+static struct platform_driver cam_eeprom_platform_driver = {
 	.driver = {
 		.name = "qcom,eeprom",
 		.owner = THIS_MODULE,
@@ -582,7 +557,7 @@ static struct spi_driver cam_eeprom_spi_driver = {
 	.probe = cam_eeprom_spi_driver_probe,
 	.remove = cam_eeprom_spi_driver_remove,
 };
-int cam_eeprom_driver_init(void)
+static int __init cam_eeprom_driver_init(void)
 {
 	int rc = 0;
 
@@ -608,12 +583,14 @@ int cam_eeprom_driver_init(void)
 	return rc;
 }
 
-void cam_eeprom_driver_exit(void)
+static void __exit cam_eeprom_driver_exit(void)
 {
 	platform_driver_unregister(&cam_eeprom_platform_driver);
 	spi_unregister_driver(&cam_eeprom_spi_driver);
 	i2c_del_driver(&cam_eeprom_i2c_driver);
 }
 
+module_init(cam_eeprom_driver_init);
+module_exit(cam_eeprom_driver_exit);
 MODULE_DESCRIPTION("CAM EEPROM driver");
 MODULE_LICENSE("GPL v2");

@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/init.h>
@@ -12,7 +19,6 @@
 #include "cam_debug_util.h"
 #include "cam_res_mgr_api.h"
 #include "cam_res_mgr_private.h"
-#include "camera_main.h"
 
 static struct cam_res_mgr *cam_res;
 
@@ -665,11 +671,9 @@ static int cam_res_mgr_parse_dt(struct device *dev)
 	return rc;
 }
 
-static int cam_res_mgr_component_bind(struct device *dev,
-	struct device *master_dev, void *data)
+static int cam_res_mgr_probe(struct platform_device *pdev)
 {
 	int rc = 0;
-	struct platform_device *pdev = to_platform_device(dev);
 
 	cam_res = kzalloc(sizeof(*cam_res), GFP_KERNEL);
 	if (!cam_res)
@@ -695,40 +699,17 @@ static int cam_res_mgr_component_bind(struct device *dev,
 	INIT_LIST_HEAD(&cam_res->gpio_res_list);
 	INIT_LIST_HEAD(&cam_res->flash_res_list);
 
-	CAM_DBG(CAM_RES, "Component bound successfully");
 	return 0;
 }
 
-static void cam_res_mgr_component_unbind(struct device *dev,
-	struct device *master_dev, void *data)
+static int cam_res_mgr_remove(struct platform_device *pdev)
 {
 	if (cam_res) {
 		cam_res_mgr_free_res();
 		kfree(cam_res);
 		cam_res = NULL;
 	}
-}
 
-const static struct component_ops cam_res_mgr_component_ops = {
-	.bind = cam_res_mgr_component_bind,
-	.unbind = cam_res_mgr_component_unbind,
-};
-
-static int cam_res_mgr_probe(struct platform_device *pdev)
-{
-	int rc = 0;
-
-	CAM_DBG(CAM_RES, "Adding Res mgr component");
-	rc = component_add(&pdev->dev, &cam_res_mgr_component_ops);
-	if (rc)
-		CAM_ERR(CAM_RES, "failed to add component rc: %d", rc);
-
-	return rc;
-}
-
-static int cam_res_mgr_remove(struct platform_device *pdev)
-{
-	component_del(&pdev->dev, &cam_res_mgr_component_ops);
 	return 0;
 }
 
@@ -738,7 +719,7 @@ static const struct of_device_id cam_res_mgr_dt_match[] = {
 };
 MODULE_DEVICE_TABLE(of, cam_res_mgr_dt_match);
 
-struct platform_driver cam_res_mgr_driver = {
+static struct platform_driver cam_res_mgr_driver = {
 	.probe = cam_res_mgr_probe,
 	.remove = cam_res_mgr_remove,
 	.driver = {
@@ -749,15 +730,17 @@ struct platform_driver cam_res_mgr_driver = {
 	},
 };
 
-int cam_res_mgr_init(void)
+static int __init cam_res_mgr_init(void)
 {
 	return platform_driver_register(&cam_res_mgr_driver);
 }
 
-void cam_res_mgr_exit(void)
+static void __exit cam_res_mgr_exit(void)
 {
 	platform_driver_unregister(&cam_res_mgr_driver);
 }
 
+module_init(cam_res_mgr_init);
+module_exit(cam_res_mgr_exit);
 MODULE_DESCRIPTION("Camera resource manager driver");
 MODULE_LICENSE("GPL v2");

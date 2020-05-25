@@ -1,6 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _CAM_CSID_HW_INTF_H_
@@ -10,9 +17,7 @@
 #include "cam_hw_intf.h"
 
 /* MAX IFE CSID instance */
-#define CAM_IFE_CSID_HW_NUM_MAX                        7
-#define CAM_IFE_CSID_RDI_MAX                           4
-#define CAM_IFE_CSID_UDI_MAX                           3
+#define CAM_IFE_CSID_HW_NUM_MAX                        4
 
 /**
  * enum cam_ife_pix_path_res_id - Specify the csid patch
@@ -24,9 +29,6 @@ enum cam_ife_pix_path_res_id {
 	CAM_IFE_PIX_PATH_RES_RDI_3,
 	CAM_IFE_PIX_PATH_RES_IPP,
 	CAM_IFE_PIX_PATH_RES_PPP,
-	CAM_IFE_PIX_PATH_RES_UDI_0,
-	CAM_IFE_PIX_PATH_RES_UDI_1,
-	CAM_IFE_PIX_PATH_RES_UDI_2,
 	CAM_IFE_PIX_PATH_RES_MAX,
 };
 
@@ -60,50 +62,14 @@ struct cam_ife_csid_hw_caps {
 	uint32_t      version_incr;
 };
 
-struct cam_isp_out_port_generic_info {
-	uint32_t                res_type;
-	uint32_t                format;
-	uint32_t                width;
-	uint32_t                height;
-	uint32_t                comp_grp_id;
-	uint32_t                split_point;
-	uint32_t                secure_mode;
-	uint32_t                reserved;
-};
-
-struct cam_isp_in_port_generic_info {
-	uint32_t                        major_ver;
-	uint32_t                        minor_ver;
-	uint32_t                        res_type;
-	uint32_t                        lane_type;
-	uint32_t                        lane_num;
-	uint32_t                        lane_cfg;
-	uint32_t                        vc[CAM_ISP_VC_DT_CFG];
-	uint32_t                        dt[CAM_ISP_VC_DT_CFG];
-	uint32_t                        num_valid_vc_dt;
-	uint32_t                        format;
-	uint32_t                        test_pattern;
-	uint32_t                        usage_type;
-	uint32_t                        left_start;
-	uint32_t                        left_stop;
-	uint32_t                        left_width;
-	uint32_t                        right_start;
-	uint32_t                        right_stop;
-	uint32_t                        right_width;
-	uint32_t                        line_start;
-	uint32_t                        line_stop;
-	uint32_t                        height;
-	uint32_t                        pixel_clk;
-	uint32_t                        batch_size;
-	uint32_t                        dsp_mode;
-	uint32_t                        hbi_cnt;
-	uint32_t                        fe_unpacker_fmt;
-	uint32_t                        cust_node;
-	uint32_t                        num_out_res;
-	uint32_t                        horizontal_bin;
-	uint32_t                        qcfa_bin;
-	uint32_t                        num_bytes_out;
-	struct cam_isp_out_port_generic_info    *data;
+/**
+ * struct cam_csid_hw_evt_payload- handle csid error
+ * @hw_idx :     Hw index of csid
+ * @evt_type :   Event type from CSID
+ */
+struct cam_csid_hw_evt_payload {
+	uint32_t            hw_idx;
+	uint32_t            evt_type;
 };
 
 /**
@@ -122,21 +88,21 @@ struct cam_isp_in_port_generic_info {
  * @cid:          cid (DT_ID) value for path, this is applicable for CSID path
  *                reserve
  * @node_res :    Reserved resource structure pointer
- * @crop_enable : Flag to indicate CSID crop enable
- * @drop_enable : Flag to indicate CSID drop enable
+ * @event_cb :    CSID Event Callback to hw manager
+ * @ctx:          Hw Manager Context for this acquire
  *
  */
 struct cam_csid_hw_reserve_resource_args {
 	enum cam_isp_resource_type                res_type;
 	uint32_t                                  res_id;
-	struct cam_isp_in_port_generic_info      *in_port;
-	struct cam_isp_out_port_generic_info     *out_port;
+	struct cam_isp_in_port_info              *in_port;
+	struct cam_isp_out_port_info             *out_port;
 	enum cam_isp_hw_sync_mode                 sync_mode;
 	uint32_t                                  master_idx;
 	uint32_t                                  cid;
 	struct cam_isp_resource_node             *node_res;
-	bool                                      crop_enable;
-	bool                                      drop_enable;
+	void                                     *ctx;
+	cam_hw_mgr_event_cb_func                  event_cb;
 };
 
 /**
@@ -188,9 +154,9 @@ struct cam_csid_reset_cfg_args {
 
 /**
  * struct cam_csid_get_time_stamp_args-  time stamp capture arguments
- * @node_res         : resource to get the time stamp
- * @time_stamp_val   : captured time stamp
- * @boot_timestamp   : boot time stamp
+ * @res_node :   resource to get the time stamp
+ * @time_stamp_val : captured time stamp
+ * @boot_timestamp : boot time stamp
  */
 struct cam_csid_get_time_stamp_args {
 	struct cam_isp_resource_node      *node_res;
@@ -205,7 +171,8 @@ enum cam_ife_csid_cmd_type {
 	CAM_IFE_CSID_CMD_GET_TIME_STAMP,
 	CAM_IFE_CSID_SET_CSID_DEBUG,
 	CAM_IFE_CSID_SOF_IRQ_DEBUG,
-	CAM_IFE_CSID_SET_CONFIG,
+	CAM_IFE_CSID_SET_INIT_FRAME_DROP,
+	CAM_IFE_CSID_SET_SENSOR_DIMENSION_CFG,
 	CAM_IFE_CSID_CMD_MAX,
 };
 
@@ -230,21 +197,16 @@ struct cam_ife_csid_clock_update_args {
 };
 
 /*
- * struct cam_ife_csid_qcfa_update_args:
+ * struct cam_ife_sensor_dim_update_args:
  *
- * @qcfa_binning:                QCFA binning supported
+ * @ppp_path:             expected ppp path configuration
+ * @ipp_path:             expected ipp path configuration
+ * @rdi_path:             expected rdi path configuration
  */
-struct cam_ife_csid_qcfa_update_args {
-	uint32_t                           qcfa_binning;
-};
-
-/*
- * struct cam_ife_csid_epd_update_args:
- *
- * @epd_supported:                flag to check epd supported or not
- */
-struct cam_ife_csid_epd_update_args {
-	uint32_t                           epd_supported;
+struct cam_ife_sensor_dimension_update_args {
+	struct cam_isp_sensor_dimension  ppp_path;
+	struct cam_isp_sensor_dimension  ipp_path;
+	struct cam_isp_sensor_dimension  rdi_path[4];
 };
 
 #endif /* _CAM_CSID_HW_INTF_H_ */

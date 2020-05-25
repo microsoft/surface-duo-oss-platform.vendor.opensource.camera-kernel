@@ -1,6 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -17,7 +24,6 @@
 #include "cam_icp_hw_mgr_intf.h"
 #include "cam_cpas_api.h"
 #include "cam_debug_util.h"
-#include "camera_main.h"
 
 struct a5_soc_info cam_a5_soc_info;
 EXPORT_SYMBOL(cam_a5_soc_info);
@@ -101,8 +107,7 @@ int cam_a5_register_cpas(struct cam_hw_soc_info *soc_info,
 	return rc;
 }
 
-static int cam_a5_component_bind(struct device *dev,
-	struct device *master_dev, void *data)
+int cam_a5_probe(struct platform_device *pdev)
 {
 	int rc = 0;
 	struct cam_hw_info *a5_dev = NULL;
@@ -110,7 +115,6 @@ static int cam_a5_component_bind(struct device *dev,
 	const struct of_device_id *match_dev = NULL;
 	struct cam_a5_device_core_info *core_info = NULL;
 	struct cam_a5_device_hw_info *hw_info = NULL;
-	struct platform_device *pdev = to_platform_device(dev);
 
 	a5_dev_intf = kzalloc(sizeof(struct cam_hw_intf), GFP_KERNEL);
 	if (!a5_dev_intf)
@@ -180,7 +184,7 @@ static int cam_a5_component_bind(struct device *dev,
 	spin_lock_init(&a5_dev->hw_lock);
 	init_completion(&a5_dev->hw_complete);
 
-	CAM_DBG(CAM_ICP, "A5:%d component bound successfully",
+	CAM_DBG(CAM_ICP, "A5%d probe successful",
 		a5_dev_intf->hw_idx);
 	return 0;
 
@@ -194,32 +198,6 @@ a5_dev_alloc_failure:
 	kfree(a5_dev_intf);
 
 	return rc;
-
-}
-
-static void cam_a5_component_unbind(struct device *dev,
-	struct device *master_dev, void *data)
-{
-	struct platform_device *pdev = to_platform_device(dev);
-
-	CAM_DBG(CAM_ICP, "Unbinding component: %s", pdev->name);
-}
-
-const static struct component_ops cam_a5_component_ops = {
-	.bind = cam_a5_component_bind,
-	.unbind = cam_a5_component_unbind,
-};
-
-int cam_a5_probe(struct platform_device *pdev)
-{
-	int rc = 0;
-
-	CAM_DBG(CAM_ICP, "Adding A5 component");
-	rc = component_add(&pdev->dev, &cam_a5_component_ops);
-	if (rc)
-		CAM_ERR(CAM_ICP, "failed to add component rc: %d", rc);
-
-	return rc;
 }
 
 static const struct of_device_id cam_a5_dt_match[] = {
@@ -231,7 +209,7 @@ static const struct of_device_id cam_a5_dt_match[] = {
 };
 MODULE_DEVICE_TABLE(of, cam_a5_dt_match);
 
-struct platform_driver cam_a5_driver = {
+static struct platform_driver cam_a5_driver = {
 	.probe = cam_a5_probe,
 	.driver = {
 		.name = "cam-a5",
@@ -241,15 +219,17 @@ struct platform_driver cam_a5_driver = {
 	},
 };
 
-int cam_a5_init_module(void)
+static int __init cam_a5_init_module(void)
 {
 	return platform_driver_register(&cam_a5_driver);
 }
 
-void cam_a5_exit_module(void)
+static void __exit cam_a5_exit_module(void)
 {
 	platform_driver_unregister(&cam_a5_driver);
 }
 
+module_init(cam_a5_init_module);
+module_exit(cam_a5_exit_module);
 MODULE_DESCRIPTION("CAM A5 driver");
 MODULE_LICENSE("GPL v2");

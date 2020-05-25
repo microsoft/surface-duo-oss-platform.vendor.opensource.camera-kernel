@@ -1,13 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-only
-/*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include "cam_cci_dev.h"
 #include "cam_req_mgr_dev.h"
 #include "cam_cci_soc.h"
 #include "cam_cci_core.h"
-#include "camera_main.h"
 
 #define CCI_MAX_DELAY 1000000
 
@@ -15,16 +21,9 @@ static struct v4l2_subdev *g_cci_subdev[MAX_CCI];
 
 struct v4l2_subdev *cam_cci_get_subdev(int cci_dev_index)
 {
-	struct v4l2_subdev *sub_device = NULL;
-
 	if (cci_dev_index < MAX_CCI)
-		sub_device = g_cci_subdev[cci_dev_index];
-	else
-		CAM_WARN(CAM_CCI, "Index: %u is beyond max num CCI allowed: %u",
-			cci_dev_index,
-			MAX_CCI);
-
-	return sub_device;
+		return g_cci_subdev[cci_dev_index];
+	return NULL;
 }
 
 static long cam_cci_subdev_ioctl(struct v4l2_subdev *sd,
@@ -42,6 +41,7 @@ static long cam_cci_subdev_ioctl(struct v4l2_subdev *sd,
 		rc = cam_cci_core_cfg(sd, arg);
 		break;
 	case VIDIOC_CAM_CONTROL:
+		rc = cam_cci_core_cam_ctrl(sd, arg);
 		break;
 	default:
 		CAM_ERR(CAM_CCI, "Invalid ioctl cmd: %d", cmd);
@@ -77,25 +77,21 @@ irqreturn_t cam_cci_irq(int irq_num, void *data)
 
 	if (irq_status0 & CCI_IRQ_STATUS_0_RST_DONE_ACK_BMSK) {
 		struct cam_cci_master_info *cci_master_info;
-		if (cci_dev->cci_master_info[MASTER_0].reset_pending == true) {
+		if (cci_dev->cci_master_info[MASTER_0].reset_pending == TRUE) {
 			cci_master_info = &cci_dev->cci_master_info[MASTER_0];
 			cci_dev->cci_master_info[MASTER_0].reset_pending =
-				false;
+				FALSE;
 			if (!cci_master_info->status)
 				complete(&cci_master_info->reset_complete);
-
-			complete_all(&cci_master_info->rd_done);
-			complete_all(&cci_master_info->th_complete);
+			cci_master_info->status = 0;
 		}
-		if (cci_dev->cci_master_info[MASTER_1].reset_pending == true) {
+		if (cci_dev->cci_master_info[MASTER_1].reset_pending == TRUE) {
 			cci_master_info = &cci_dev->cci_master_info[MASTER_1];
 			cci_dev->cci_master_info[MASTER_1].reset_pending =
-				false;
+				FALSE;
 			if (!cci_master_info->status)
 				complete(&cci_master_info->reset_complete);
-
-			complete_all(&cci_master_info->rd_done);
-			complete_all(&cci_master_info->th_complete);
+			cci_master_info->status = 0;
 		}
 	}
 
@@ -217,29 +213,20 @@ irqreturn_t cam_cci_irq(int irq_num, void *data)
 		CAM_DBG(CAM_CCI, "RD_PAUSE ON MASTER_1");
 
 	if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_Q0Q1_HALT_ACK_BMSK) {
-		cci_dev->cci_master_info[MASTER_0].reset_pending = true;
+		cci_dev->cci_master_info[MASTER_0].reset_pending = TRUE;
 		cam_io_w_mb(CCI_M0_RESET_RMSK,
 			base + CCI_RESET_CMD_ADDR);
 	}
 	if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M1_Q0Q1_HALT_ACK_BMSK) {
-		cci_dev->cci_master_info[MASTER_1].reset_pending = true;
+		cci_dev->cci_master_info[MASTER_1].reset_pending = TRUE;
 		cam_io_w_mb(CCI_M1_RESET_RMSK,
 			base + CCI_RESET_CMD_ADDR);
 	}
 	if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_ERROR_BMSK) {
 		cci_dev->cci_master_info[MASTER_0].status = -EINVAL;
-		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_Q0_NACK_ERROR_BMSK) {
-			CAM_ERR(CAM_CCI, "Base:%pK, M0_Q0 NACK ERROR: 0x%x",
+		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_NACK_ERROR_BMSK)
+			CAM_ERR(CAM_CCI, "Base:%pK, M0 NACK ERROR: 0x%x",
 				base, irq_status0);
-			complete_all(&cci_dev->cci_master_info[MASTER_0]
-				.report_q[QUEUE_0]);
-		}
-		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_Q1_NACK_ERROR_BMSK) {
-			CAM_ERR(CAM_CCI, "Base:%pK, M0_Q1 NACK ERROR: 0x%x",
-				base, irq_status0);
-			complete_all(&cci_dev->cci_master_info[MASTER_0]
-			.report_q[QUEUE_1]);
-		}
 		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_Q0Q1_ERROR_BMSK)
 			CAM_ERR(CAM_CCI,
 			"Base:%pK, M0 QUEUE_OVER/UNDER_FLOW OR CMD ERR: 0x%x",
@@ -248,35 +235,24 @@ irqreturn_t cam_cci_irq(int irq_num, void *data)
 			CAM_ERR(CAM_CCI,
 				"Base: %pK, M0 RD_OVER/UNDER_FLOW ERROR: 0x%x",
 				base, irq_status0);
-
-		cci_dev->cci_master_info[MASTER_0].reset_pending = true;
-		cam_io_w_mb(CCI_M0_RESET_RMSK, base + CCI_RESET_CMD_ADDR);
+		cam_io_w_mb(CCI_M0_HALT_REQ_RMSK, base + CCI_HALT_REQ_ADDR);
+		complete(&cci_dev->cci_master_info[MASTER_0].rd_done);
 	}
 	if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M1_ERROR_BMSK) {
 		cci_dev->cci_master_info[MASTER_1].status = -EINVAL;
-		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M1_Q0_NACK_ERROR_BMSK) {
-			CAM_ERR(CAM_CCI, "Base:%pK, M1_Q0 NACK ERROR: 0x%x",
+		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_NACK_ERROR_BMSK)
+			CAM_ERR(CAM_CCI, "Base:%pK, M1 NACK ERROR: 0x%x",
 				base, irq_status0);
-			complete_all(&cci_dev->cci_master_info[MASTER_1]
-			.report_q[QUEUE_0]);
-		}
-		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M1_Q1_NACK_ERROR_BMSK) {
-			CAM_ERR(CAM_CCI, "Base:%pK, M1_Q1 NACK ERROR: 0x%x",
-				base, irq_status0);
-			complete_all(&cci_dev->cci_master_info[MASTER_1]
-			.report_q[QUEUE_1]);
-		}
-		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M1_Q0Q1_ERROR_BMSK)
+		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_Q0Q1_ERROR_BMSK)
 			CAM_ERR(CAM_CCI,
 			"Base:%pK, M1 QUEUE_OVER_UNDER_FLOW OR CMD ERROR:0x%x",
 				base, irq_status0);
-		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M1_RD_ERROR_BMSK)
+		if (irq_status0 & CCI_IRQ_STATUS_0_I2C_M0_RD_ERROR_BMSK)
 			CAM_ERR(CAM_CCI,
 				"Base:%pK, M1 RD_OVER/UNDER_FLOW ERROR: 0x%x",
 				base, irq_status0);
-
-		cci_dev->cci_master_info[MASTER_1].reset_pending = true;
-		cam_io_w_mb(CCI_M1_RESET_RMSK, base + CCI_RESET_CMD_ADDR);
+		cam_io_w_mb(CCI_M1_HALT_REQ_RMSK, base + CCI_HALT_REQ_ADDR);
+		complete(&cci_dev->cci_master_info[MASTER_1].rd_done);
 	}
 
 	cam_io_w_mb(irq_status0, base + CCI_IRQ_CLEAR_0_ADDR);
@@ -335,6 +311,7 @@ irqreturn_t cam_cci_irq(int irq_num, void *data)
 		cam_io_w_mb(irq_update_rd_done, base + CCI_IRQ_MASK_1_ADDR);
 	}
 
+
 	cam_io_w_mb(irq_status1, base + CCI_IRQ_CLEAR_1_ADDR);
 	cam_io_w_mb(0x1, base + CCI_IRQ_GLOBAL_CLEAR_CMD_ADDR);
 	return IRQ_HANDLED;
@@ -349,7 +326,7 @@ static int cam_cci_irq_routine(struct v4l2_subdev *sd, u32 status,
 		&cci_dev->soc_info;
 
 	ret = cam_cci_irq(soc_info->irq_line->start, cci_dev);
-	*handled = true;
+	*handled = TRUE;
 	return 0;
 }
 
@@ -367,16 +344,42 @@ static const struct v4l2_subdev_ops cci_subdev_ops = {
 
 static const struct v4l2_subdev_internal_ops cci_subdev_intern_ops;
 
-static int cam_cci_component_bind(struct device *dev,
-	struct device *master_dev, void *data)
+static struct v4l2_file_operations cci_v4l2_subdev_fops;
+
+static long cam_cci_subdev_do_ioctl(
+	struct file *file, unsigned int cmd, void *arg)
+{
+	struct video_device *vdev = video_devdata(file);
+	struct v4l2_subdev *sd = vdev_to_v4l2_subdev(vdev);
+
+	return cam_cci_subdev_ioctl(sd, cmd, arg);
+}
+
+static long cam_cci_subdev_fops_ioctl(struct file *file, unsigned int cmd,
+	unsigned long arg)
+{
+	return video_usercopy(file, cmd, arg, cam_cci_subdev_do_ioctl);
+}
+
+#ifdef CONFIG_COMPAT
+static long cam_cci_subdev_fops_compat_ioctl(struct file *file,
+	unsigned int cmd, unsigned long arg)
+{
+	struct video_device *vdev = video_devdata(file);
+	struct v4l2_subdev *sd = vdev_to_v4l2_subdev(vdev);
+
+	return v4l2_subdev_call(sd, core, ioctl, cmd, NULL);
+}
+#endif
+
+static int cam_cci_platform_probe(struct platform_device *pdev)
 {
 	struct cam_cpas_register_params cpas_parms;
 	struct cci_device *new_cci_dev;
 	struct cam_hw_soc_info *soc_info = NULL;
 	int rc = 0;
-	struct platform_device *pdev = to_platform_device(dev);
 
-	new_cci_dev = devm_kzalloc(&pdev->dev, sizeof(struct cci_device),
+	new_cci_dev = kzalloc(sizeof(struct cci_device),
 		GFP_KERNEL);
 	if (!new_cci_dev)
 		return -ENOMEM;
@@ -426,7 +429,18 @@ static int cam_cci_component_bind(struct device *dev,
 
 	g_cci_subdev[soc_info->index] = &new_cci_dev->v4l2_dev_str.sd;
 	mutex_init(&(new_cci_dev->init_mutex));
+
+	new_cci_dev->cci_debug.cci_device = soc_info->index;
+	new_cci_dev->cci_debug.cci_subdev = g_cci_subdev[soc_info->index];
+
 	CAM_INFO(CAM_CCI, "Device Type :%d", soc_info->index);
+
+	cam_register_subdev_fops(&cci_v4l2_subdev_fops);
+	cci_v4l2_subdev_fops.unlocked_ioctl = cam_cci_subdev_fops_ioctl;
+#ifdef CONFIG_COMPAT
+	cci_v4l2_subdev_fops.compat_ioctl32 =
+		cam_cci_subdev_fops_compat_ioctl;
+#endif
 
 	cpas_parms.cam_cpas_client_cb = NULL;
 	cpas_parms.cell_index = soc_info->index;
@@ -438,56 +452,25 @@ static int cam_cci_component_bind(struct device *dev,
 		CAM_ERR(CAM_CCI, "CPAS registration failed");
 		goto cci_no_resource;
 	}
-
 	CAM_DBG(CAM_CCI, "CPAS registration successful handle=%d",
 		cpas_parms.client_handle);
 	new_cci_dev->cpas_handle = cpas_parms.client_handle;
-	CAM_DBG(CAM_CCI, "Component bound successfully");
+
 	return rc;
 cci_no_resource:
-	devm_kfree(&pdev->dev, new_cci_dev);
+	kfree(new_cci_dev);
 	return rc;
 }
 
-static void cam_cci_component_unbind(struct device *dev,
-	struct device *master_dev, void *data)
+static int cam_cci_device_remove(struct platform_device *pdev)
 {
-	int rc = 0;
-	struct platform_device *pdev = to_platform_device(dev);
-
 	struct v4l2_subdev *subdev = platform_get_drvdata(pdev);
 	struct cci_device *cci_dev =
 		v4l2_get_subdevdata(subdev);
 
 	cam_cpas_unregister_client(cci_dev->cpas_handle);
 	cam_cci_soc_remove(pdev, cci_dev);
-	rc = cam_unregister_subdev(&(cci_dev->v4l2_dev_str));
-	if (rc < 0)
-		CAM_ERR(CAM_CCI, "Fail with cam_unregister_subdev");
-
 	devm_kfree(&pdev->dev, cci_dev);
-}
-
-const static struct component_ops cam_cci_component_ops = {
-	.bind = cam_cci_component_bind,
-	.unbind = cam_cci_component_unbind,
-};
-
-static int cam_cci_platform_probe(struct platform_device *pdev)
-{
-	int rc = 0;
-
-	CAM_DBG(CAM_CCI, "Adding CCI component");
-	rc = component_add(&pdev->dev, &cam_cci_component_ops);
-	if (rc)
-		CAM_ERR(CAM_CCI, "failed to add component rc: %d", rc);
-
-	return rc;
-}
-
-static int cam_cci_device_remove(struct platform_device *pdev)
-{
-	component_del(&pdev->dev, &cam_cci_component_ops);
 	return 0;
 }
 
@@ -498,7 +481,7 @@ static const struct of_device_id cam_cci_dt_match[] = {
 
 MODULE_DEVICE_TABLE(of, cam_cci_dt_match);
 
-struct platform_driver cci_driver = {
+static struct platform_driver cci_driver = {
 	.probe = cam_cci_platform_probe,
 	.remove = cam_cci_device_remove,
 	.driver = {
@@ -509,15 +492,44 @@ struct platform_driver cci_driver = {
 	},
 };
 
-int cam_cci_init_module(void)
+static int cam_cci_assign_fops(void)
+{
+	struct v4l2_subdev *sd;
+	int i = 0;
+
+	for (; i < MAX_CCI; i++) {
+		sd = g_cci_subdev[i];
+		if (!sd)
+			return 0;
+		if (!(sd->devnode)) {
+			CAM_ERR(CAM_CCI,
+			"Invalid dev node:%pK offset: %d",
+			sd->devnode, i);
+			return -EINVAL;
+		}
+		sd->devnode->fops = &cci_v4l2_subdev_fops;
+	}
+
+	return 0;
+}
+
+static int __init cam_cci_late_init(void)
+{
+	return cam_cci_assign_fops();
+}
+
+static int __init cam_cci_init_module(void)
 {
 	return platform_driver_register(&cci_driver);
 }
 
-void cam_cci_exit_module(void)
+static void __exit cam_cci_exit_module(void)
 {
 	platform_driver_unregister(&cci_driver);
 }
 
+module_init(cam_cci_init_module);
+late_initcall(cam_cci_late_init);
+module_exit(cam_cci_exit_module);
 MODULE_DESCRIPTION("MSM CCI driver");
 MODULE_LICENSE("GPL v2");
