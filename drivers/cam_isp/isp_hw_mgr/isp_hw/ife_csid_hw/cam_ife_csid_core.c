@@ -805,7 +805,7 @@ static int cam_ife_csid_cid_reserve(struct cam_ife_csid_hw *csid_hw,
 		if (cid_reserv->in_port->res_type == CAM_ISP_IFE_IN_RES_TPG) {
 			csid_hw->csi2_rx_cfg.phy_sel = 0;
 			if (cid_reserv->in_port->format >
-			    CAM_FORMAT_MIPI_RAW_16) {
+				CAM_FORMAT_MIPI_RAW_16) {
 				CAM_ERR(CAM_ISP, " Wrong TPG format");
 				rc = -EINVAL;
 				goto end;
@@ -1077,6 +1077,9 @@ static int cam_ife_csid_enable_hw(struct cam_ife_csid_hw  *csid_hw)
 			csid_hw->hw_intf->hw_idx);
 		goto err;
 	}
+
+	memset(csid_hw->vc_info, 0xff, sizeof(csid_hw->vc_info));
+	memset(csid_hw->df_info, 0xff, sizeof(csid_hw->df_info));
 
 	csid_hw->hw_info->hw_state = CAM_HW_STATE_POWER_UP;
 	/* Reset CSID top */
@@ -2063,10 +2066,11 @@ static int cam_ife_csid_init_config_rdi_path(
 	struct cam_ife_csid_path_cfg           *path_data;
 	const struct cam_ife_csid_reg_offset   *csid_reg;
 	struct cam_hw_soc_info                 *soc_info;
-	uint32_t path_format = 0, plain_fmt = 0, val = 0, id, in_bpp = 0;
+	uint32_t path_format = 0, plain_fmt = 0, val = 0, id, in_bpp = 0,
+		i = 0, tmp = 0;
 	uint32_t format_measure_addr;
 
-	path_data = (struct cam_ife_csid_path_cfg   *) res->res_priv;
+	path_data = (struct cam_ife_csid_path_cfg *) res->res_priv;
 	csid_reg = csid_hw->csid_info->csid_reg;
 	soc_info = &csid_hw->hw_info->soc_info;
 
@@ -2182,6 +2186,34 @@ static int cam_ife_csid_init_config_rdi_path(
 	/* Enable the RPP path */
 	val = cam_io_r_mb(soc_info->reg_map[0].mem_base +
 		csid_reg->rdi_reg[id]->csid_rdi_cfg0_addr);
+
+	/* program the IPP CFG0 for full IFE in case of crop*/
+	if ((csid_hw->hw_intf->hw_idx == 0 ||
+		csid_hw->hw_intf->hw_idx == 1) && path_data->crop_enable &&
+		csid_hw->ipp_cfg == false) {
+		for (i = 0; i < CAM_IFE_PIX_PATH_RES_RDI_3; i++) {
+			/*checking for multiple streams of same VC and DF*/
+			if (csid_hw->vc_info[i] == path_data->vc &&
+				csid_hw->df_info[i] == path_format) {
+				tmp = path_format <<
+					csid_reg->cmn_reg->fmt_shift_val;
+
+				cam_io_w_mb(tmp, soc_info->reg_map[0].mem_base +
+					csid_reg->ipp_reg->csid_pxl_cfg0_addr);
+
+				CAM_DBG(CAM_ISP,
+					"Set decode fmt %d for ipp cfg0",
+					path_format);
+
+				csid_hw->ipp_cfg = true;
+				break;
+			}
+		}
+	}
+
+	csid_hw->vc_info[id] = path_data->vc;
+	csid_hw->df_info[id] = path_format;
+
 	val |= (1 << csid_reg->cmn_reg->path_en_shift_val);
 
 	if (csid_hw->csid_debug & CSID_DEBUG_ENABLE_HBI_VBI_INFO)
@@ -2236,11 +2268,14 @@ static int cam_ife_csid_deinit_rdi_path(
 	struct cam_ife_csid_hw          *csid_hw,
 	struct cam_isp_resource_node    *res)
 {
-	int rc = 0;
+	int rc = 0, i = 0;
+	int check_cnt =  0;
 	uint32_t id, val, format_measure_addr;
 	const struct cam_ife_csid_reg_offset      *csid_reg;
 	struct cam_hw_soc_info                    *soc_info;
+	struct cam_ife_csid_path_cfg              *path_data;
 
+	path_data = (struct cam_ife_csid_path_cfg *) res->res_priv;
 	csid_reg = csid_hw->csid_info->csid_reg;
 	soc_info = &csid_hw->hw_info->soc_info;
 	id = res->res_id;
@@ -2271,6 +2306,24 @@ static int cam_ife_csid_deinit_rdi_path(
 		cam_io_w_mb(val, soc_info->reg_map[0].mem_base +
 			format_measure_addr);
 	}
+
+
+
+	if (csid_hw->ipp_cfg) {
+		for (i = 0; i < CAM_IFE_PIX_PATH_RES_RDI_3; i++) {
+			if (id != i &&
+				csid_hw->vc_info[i] == csid_hw->vc_info[id] &&
+				csid_hw->df_info[i] == csid_hw->df_info[id])
+				check_cnt++;
+		}
+
+		if (check_cnt <= 1)
+			csid_hw->ipp_cfg = false;
+	}
+
+
+	csid_hw->vc_info[id] = 0xff;
+	csid_hw->df_info[id] = 0xff;
 
 	res->res_state = CAM_ISP_RESOURCE_STATE_RESERVED;
 	return rc;
@@ -2397,6 +2450,7 @@ static int cam_ife_csid_disable_rdi_path(
 	val |= stop_cmd;
 	cam_io_w_mb(val, soc_info->reg_map[0].mem_base +
 		csid_reg->rdi_reg[id]->csid_rdi_ctrl_addr);
+
 
 	return rc;
 }

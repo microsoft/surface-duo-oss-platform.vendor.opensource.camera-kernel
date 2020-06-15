@@ -1,8 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
-/*
- * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
- */
-
 #ifndef __UAPI_CAM_SENSOR_H__
 #define __UAPI_CAM_SENSOR_H__
 
@@ -11,9 +6,10 @@
 #include <media/cam_defs.h>
 
 #define CAM_SENSOR_PROBE_CMD   (CAM_COMMON_OPCODE_MAX + 1)
-#define CAM_FLASH_MAX_LED_TRIGGERS 2
+#define CAM_FLASH_MAX_LED_TRIGGERS 3
 #define MAX_OIS_NAME_SIZE 32
 #define CAM_CSIPHY_SECURE_MODE_ENABLED 1
+#define CAM_IR_LED_SUPPORTED
 /**
  * struct cam_sensor_query_cap - capabilities info for sensor
  *
@@ -27,6 +23,7 @@
  * @ois_slot_id      :  OIS slot id which connected to sensor
  * @flash_slot_id    :  Flash slot id which connected to sensor
  * @csiphy_slot_id   :  CSIphy slot id which connected to sensor
+ * @irled_slot_id    :  IRLED slot id which connected to sensor
  *
  */
 struct  cam_sensor_query_cap {
@@ -40,6 +37,7 @@ struct  cam_sensor_query_cap {
 	uint32_t        ois_slot_id;
 	uint32_t        flash_slot_id;
 	uint32_t        csiphy_slot_id;
+	uint32_t        ir_led_slot_id;
 } __attribute__((packed));
 
 /**
@@ -78,7 +76,7 @@ struct cam_actuator_query_cap {
 struct cam_eeprom_query_cap_t {
 	uint32_t            slot_info;
 	uint16_t            eeprom_kernel_probe;
-	uint16_t            is_multimodule_mode;
+	uint16_t            reserved;
 } __attribute__((packed));
 
 /**
@@ -99,10 +97,9 @@ struct cam_ois_query_cap_t {
  * @cmd_type        :    Explains type of command
  */
 struct cam_cmd_i2c_info {
-	uint32_t    slave_addr;
+	uint16_t    slave_addr;
 	uint8_t     i2c_freq_mode;
 	uint8_t     cmd_type;
-	uint16_t    reserved;
 } __attribute__((packed));
 
 /**
@@ -132,7 +129,7 @@ struct cam_ois_opcode {
  * @opcode                :    opcode
  */
 struct cam_cmd_ois_info {
-	uint32_t              slave_addr;
+	uint16_t              slave_addr;
 	uint8_t               i2c_freq_mode;
 	uint8_t               cmd_type;
 	uint8_t               ois_fw_flag;
@@ -192,10 +189,9 @@ struct cam_power_settings {
  * @power_settings  :    Contains power setting info
  */
 struct cam_cmd_power {
-	uint32_t                    count;
+	uint16_t                    count;
 	uint8_t                     reserved;
 	uint8_t                     cmd_type;
-	uint16_t                    more_reserved;
 	struct cam_power_settings   power_settings[1];
 } __attribute__((packed));
 
@@ -210,11 +206,12 @@ struct cam_cmd_power {
  * @ reserved
  */
 struct i2c_rdwr_header {
-	uint32_t    count;
+	uint16_t    count;
 	uint8_t     op_code;
 	uint8_t     cmd_type;
 	uint8_t     data_type;
 	uint8_t     addr_type;
+	uint16_t    reserved;
 } __attribute__((packed));
 
 /**
@@ -300,10 +297,10 @@ struct cam_cmd_i2c_continuous_rd {
 struct cam_cmd_conditional_wait {
 	uint8_t     data_type;
 	uint8_t     addr_type;
-	uint16_t    reserved;
 	uint8_t     op_code;
 	uint8_t     cmd_type;
 	uint16_t    timeout;
+	uint16_t    reserved;
 	uint32_t    reg_addr;
 	uint32_t    reg_data;
 	uint32_t    data_mask;
@@ -317,10 +314,8 @@ struct cam_cmd_conditional_wait {
  */
 struct cam_cmd_unconditional_wait {
 	int16_t     delay;
-	int16_t     reserved;
 	uint8_t     op_code;
 	uint8_t     cmd_type;
-	uint16_t    reserved1;
 } __attribute__((packed));
 
 /**
@@ -401,10 +396,9 @@ struct cam_sensor_streamon_dev {
  * @cmd_type    :    command buffer type
  */
 struct cam_flash_init {
-	uint32_t    flash_type;
-	uint8_t     reserved;
+	uint8_t     flash_type;
+	uint16_t    reserved;
 	uint8_t     cmd_type;
-	uint16_t    reserved1;
 } __attribute__((packed));
 
 /**
@@ -422,10 +416,11 @@ struct cam_flash_init {
  *
  */
 struct cam_flash_set_rer {
-	uint32_t    count;
+	uint16_t    count;
 	uint8_t     opcode;
 	uint8_t     cmd_type;
 	uint16_t    num_iteration;
+	uint16_t    reserved;
 	uint32_t    led_on_delay_ms;
 	uint32_t    led_off_delay_ms;
 	uint32_t    led_current_ma[CAM_FLASH_MAX_LED_TRIGGERS];
@@ -434,23 +429,20 @@ struct cam_flash_set_rer {
 /**
  * struct cam_flash_set_on_off : led turn on/off command buffer
  *
- * @count                  : Number of Flash leds
- * @opcode                 : Command buffer opcodes
- *			     CAM_FLASH_FIRE_LOW
- *			     CAM_FLASH_FIRE_HIGH
- *			     CAM_FLASH_OFF
- * @cmd_type               : Command buffer operation type
- * @led_current_ma         : Flash led current in ma
- * @time_on_duration_ms    : Flash time on duration in ns
+ * @count              :   Number of Flash leds
+ * @opcode             :   command buffer opcodes
+ *			CAM_FLASH_FIRE_LOW
+ *			CAM_FLASH_FIRE_HIGH
+ *			CAM_FLASH_OFF
+ * @cmd_type           :   command buffer operation type
+ * @led_current_ma     :   flash led current in ma
  *
  */
 struct cam_flash_set_on_off {
-	uint32_t    count;
+	uint16_t    count;
 	uint8_t     opcode;
 	uint8_t     cmd_type;
-	uint16_t    reserved;
 	uint32_t    led_current_ma[CAM_FLASH_MAX_LED_TRIGGERS];
-	uint64_t    time_on_duration_ns;
 } __attribute__((packed));
 
 /**
@@ -485,4 +477,32 @@ struct cam_flash_query_cap_info {
 	uint32_t    max_current_torch[CAM_FLASH_MAX_LED_TRIGGERS];
 } __attribute__ ((packed));
 
+/**
+ * struct cam_ir_led_query_cap  :  capabilities info for ir_led
+ *
+ * @slot_info           :  Indicates about the slotId or cell Index
+ *
+ */
+struct cam_ir_led_query_cap_info {
+	uint32_t    slot_info;
+} __attribute__ ((packed));
+
+/**
+ * struct cam_ir_ledset_on_off : led turn on/off command buffer
+ *
+ * @opcode             :   command buffer opcodes
+ * @cmd_type           :   command buffer operation type
+ * @ir_led_intensity   :   ir led intensity level
+ * @pwm_duty_on_ns     :   PWM duty cycle in ns for IRLED intensity
+ * @pwm_period_ns      :   PWM period in ns
+ *
+ */
+struct cam_ir_led_set_on_off {
+	uint16_t    reserved;
+	uint8_t     opcode;
+	uint8_t     cmd_type;
+	uint32_t    ir_led_intensity;
+	uint32_t    pwm_duty_on_ns;
+	uint32_t    pwm_period_ns;
+} __attribute__((packed));
 #endif

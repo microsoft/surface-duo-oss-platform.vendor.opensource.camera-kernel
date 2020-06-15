@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -79,6 +79,14 @@ int cam_cci_init(struct v4l2_subdev *sd,
 		return 0;
 	}
 
+	/* Enable Regulators and IRQ*/
+	rc = cam_soc_util_enable_platform_resource(soc_info, true,
+		CAM_LOWSVS_VOTE, true);
+	if (rc < 0) {
+		CAM_ERR(CAM_CCI, "request platform resources failed");
+		goto platform_enable_failed;
+	}
+
 	ahb_vote.type = CAM_VOTE_ABSOLUTE;
 	ahb_vote.vote.level = CAM_SVS_VOTE;
 	axi_vote.compressed_bw = CAM_CPAS_DEFAULT_AXI_BW;
@@ -98,14 +106,6 @@ int cam_cci_init(struct v4l2_subdev *sd,
 	for (i = 0; i < NUM_QUEUES; i++)
 		reinit_completion(
 			&cci_dev->cci_master_info[master].report_q[i]);
-
-	/* Enable Regulators and IRQ*/
-	rc = cam_soc_util_enable_platform_resource(soc_info, true,
-		CAM_LOWSVS_VOTE, true);
-	if (rc < 0) {
-		CAM_DBG(CAM_CCI, "request platform resources failed");
-		goto platform_enable_failed;
-	}
 
 	cci_dev->hw_version = cam_io_r_mb(base +
 		CCI_HW_VERSION_ADDR);
@@ -176,11 +176,11 @@ int cam_cci_init(struct v4l2_subdev *sd,
 	return 0;
 
 reset_complete_failed:
+	cam_cpas_stop(cci_dev->cpas_handle);
 	cam_soc_util_disable_platform_resource(soc_info, 1, 1);
 
 platform_enable_failed:
 	cci_dev->ref_count--;
-	cam_cpas_stop(cci_dev->cpas_handle);
 
 	return rc;
 }

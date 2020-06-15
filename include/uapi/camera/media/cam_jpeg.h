@@ -1,12 +1,7 @@
-/* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
- */
-
 #ifndef __UAPI_CAM_JPEG_H__
 #define __UAPI_CAM_JPEG_H__
 
-#include <media/cam_defs.h>
+#include "cam_defs.h"
 
 /* enc, dma, cdm(enc/dma) are used in querycap */
 #define CAM_JPEG_DEV_TYPE_ENC      0

@@ -1,8 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
-/*
- * Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
- */
-
 #ifndef __UAPI_CAM_SYNC_H__
 #define __UAPI_CAM_SYNC_H__
 
@@ -135,5 +130,24 @@ struct cam_private_ioctl_arg {
 #define CAM_SYNC_REGISTER_PAYLOAD                4
 #define CAM_SYNC_DEREGISTER_PAYLOAD              5
 #define CAM_SYNC_WAIT                            6
+
+/**
+ * Extensions
+ */
+/**
+ * struct cam_sync_create2 - Sync object creation information extension
+ *
+ * @name:       Optional string representation of the sync object
+ * @sync_obj:   Sync object returned after creation in kernel
+ * @client_id:  Client ID. The returned event will be offset by client_id
+ */
+struct cam_sync_create2 {
+	char name[64];
+	int32_t sync_obj;
+	uint32_t client_id;
+};
+
+#define CAM_SYNC_CREATE2                         10
+#define CAM_SYNC_RESET                           11
 
 #endif /* __UAPI_CAM_SYNC_H__ */

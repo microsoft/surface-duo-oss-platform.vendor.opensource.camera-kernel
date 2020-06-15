@@ -1,8 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
-/*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
- */
-
 #ifndef __UAPI_CAM_DEFS_H__
 #define __UAPI_CAM_DEFS_H__
 
@@ -55,11 +50,6 @@
 
 /* UBWC API Version */
 #define CAM_UBWC_CFG_VERSION_1              1
-#define CAM_UBWC_CFG_VERSION_2              2
-
-#define CAM_MAX_ACQ_RES    5
-#define CAM_MAX_HW_SPLIT   3
-
 
 /**
  * enum flush_type_t - Identifies the various flush types
@@ -175,19 +165,7 @@ struct cam_iommu_handle {
 #define CAM_FORMAT_YV12                         44
 #define CAM_FORMAT_Y_ONLY                       45
 #define CAM_FORMAT_DPCM_12_10_12                46
-#define CAM_FORMAT_PLAIN32                      47
-#define CAM_FORMAT_ARGB_16                      48
-#define CAM_FORMAT_MAX                          49
-
-/* Pixel Patterns */
-#define PIXEL_PATTERN_RGRGRG                    0x0
-#define PIXEL_PATTERN_GRGRGR                    0x1
-#define PIXEL_PATTERN_BGBGBG                    0x2
-#define PIXEL_PATTERN_GBGBGB                    0x3
-#define PIXEL_PATTERN_YCBYCR                    0x4
-#define PIXEL_PATTERN_YCRYCB                    0x5
-#define PIXEL_PATTERN_CBYCRY                    0x6
-#define PIXEL_PATTERN_CRYCBY                    0x7
+#define CAM_FORMAT_MAX                          47
 
 /* camera rotaion */
 #define CAM_ROTATE_CW_0_DEGREE                  0
@@ -228,21 +206,7 @@ struct cam_iommu_handle {
 #define CAM_PACKET_DEV_IFE                      15
 #define CAM_PACKET_DEV_ICP                      16
 #define CAM_PACKET_DEV_LRME                     17
-#define CAM_PACKET_DEV_TFE                      18
-#define CAM_PACKET_DEV_OPE                      19
-#define CAM_PACKET_DEV_MAX                      20
-
-/* Register base type */
-#define CAM_REG_DUMP_BASE_TYPE_ISP_LEFT         1
-#define CAM_REG_DUMP_BASE_TYPE_ISP_RIGHT        2
-#define CAM_REG_DUMP_BASE_TYPE_CAMNOC           3
-
-/* Register dump read type */
-#define CAM_REG_DUMP_READ_TYPE_CONT_RANGE       1
-#define CAM_REG_DUMP_READ_TYPE_DMI              2
-
-/* Max number of config writes to read from DMI */
-#define CAM_REG_DUMP_DMI_CONFIG_MAX             5
+#define CAM_PACKET_DEV_MAX                      18
 
 
 /* constants */
@@ -308,46 +272,6 @@ struct cam_ubwc_plane_cfg_v1 {
 	uint32_t                v_init;
 };
 
-/**
- * struct cam_ubwc_plane_cfg_v2 - UBWC Plane configuration info
- *
- * @port_type:                  Port Type
- * @meta_stride:                UBWC metadata stride
- * @meta_size:                  UBWC metadata plane size
- * @meta_offset:                UBWC metadata offset
- * @packer_config:              UBWC packer config
- * @mode_config:                UBWC mode config
- * @static ctrl:                UBWC static ctrl
- * @ctrl_2:                     UBWC ctrl 2
- * @tile_config:                UBWC tile config
- * @h_init:                     UBWC horizontal initial coordinate in pixels
- * @v_init:                     UBWC vertical initial coordinate in lines
- * @stats_ctrl_2:               UBWC stats control
- * @lossy_threshold0            UBWC lossy threshold 0
- * @lossy_threshold1            UBWC lossy threshold 1
- * @lossy_var_offset            UBWC offset variance thrshold
- *
- */
-struct cam_ubwc_plane_cfg_v2 {
-	uint32_t                port_type;
-	uint32_t                meta_stride;
-	uint32_t                meta_size;
-	uint32_t                meta_offset;
-	uint32_t                packer_config;
-	uint32_t                mode_config_0;
-	uint32_t                mode_config_1;
-	uint32_t                tile_config;
-	uint32_t                h_init;
-	uint32_t                v_init;
-	uint32_t                static_ctrl;
-	uint32_t                ctrl_2;
-	uint32_t                stats_ctrl_2;
-	uint32_t                lossy_threshold_0;
-	uint32_t                lossy_threshold_1;
-	uint32_t                lossy_var_offset;
-	uint32_t                bandwidth_limit;
-	uint32_t                reserved[3];
-};
 /**
  * struct cam_cmd_buf_desc - Command buffer descriptor
  *
@@ -580,7 +504,6 @@ struct cam_acquire_dev_cmd {
 #define CAM_API_COMPAT_CONSTANT                   0xFEFEFEFE
 
 #define CAM_ACQUIRE_HW_STRUCT_VERSION_1           1
-#define CAM_ACQUIRE_HW_STRUCT_VERSION_2           2
 
 /**
  * struct cam_acquire_hw_cmd_v1 - Control payload for acquire HW IOCTL (Ver 1)
@@ -609,51 +532,6 @@ struct cam_acquire_hw_cmd_v1 {
 	uint32_t        handle_type;
 	uint32_t        data_size;
 	uint64_t        resource_hdl;
-};
-
-/**
- * struct cam_acquired_hw_info - Update the acquired hardware info
- *
- * @acquired_hw_id:     Acquired hardware mask
- * @acquired_hw_path:   Acquired path mask for an input
- *                      if input splits into multiple paths,
- *                      its updated per hardware
- * valid_acquired_hw:   Valid num of acquired hardware
- */
-struct cam_acquired_hw_info {
-	uint32_t    acquired_hw_id[CAM_MAX_ACQ_RES];
-	uint32_t    acquired_hw_path[CAM_MAX_ACQ_RES][CAM_MAX_HW_SPLIT];
-	uint32_t    valid_acquired_hw;
-};
-
-/**
- * struct cam_acquire_hw_cmd_v2 - Control payload for acquire HW IOCTL (Ver 2)
- *
- * @struct_version:     = CAM_ACQUIRE_HW_STRUCT_VERSION_2 for this struct
- *                      This value should be the first 32-bits in any structure
- *                      related to this IOCTL. So that if the struct needs to
- *                      change, we can first read the starting 32-bits, get the
- *                      version number and then typecast the data to struct
- *                      accordingly.
- * @reserved:           Reserved field for 64-bit alignment
- * @session_handle:     Session handle for the acquire command
- * @dev_handle:         Device handle to be returned
- * @handle_type:        Tells you how to interpret the variable resource_hdl-
- *                      1 = user pointer, 2 = mem handle
- * @data_size:          Total size of data contained in memory pointed
- *                      to by resource_hdl
- * @resource_hdl:       Resource handle that refers to the actual
- *                      resource data.
- */
-struct cam_acquire_hw_cmd_v2 {
-	uint32_t                    struct_version;
-	uint32_t                    reserved;
-	int32_t                     session_handle;
-	int32_t                     dev_handle;
-	uint32_t                    handle_type;
-	uint32_t                    data_size;
-	uint64_t                    resource_hdl;
-	struct cam_acquired_hw_info hw_info;
 };
 
 #define CAM_RELEASE_HW_STRUCT_VERSION_1           1
@@ -719,24 +597,6 @@ struct cam_ubwc_config {
 };
 
 /**
- * struct cam_ubwc_config_v2 - UBWC Configuration Payload
- *
- * @api_version:         UBWC config api version
- * @num_ports:           Number of ports to be configured
- * @ubwc_plane_config:   Array of UBWC configurations per port
- *                       Size [CAM_PACKET_MAX_PLANES - 1] per port
- *                       as UBWC is supported on Y & C planes
- *                       and therefore a max size of 2 planes
- *
- */
-struct cam_ubwc_config_v2 {
-	uint32_t   api_version;
-	uint32_t   num_ports;
-	struct cam_ubwc_plane_cfg_v2
-	   ubwc_plane_cfg[1][CAM_PACKET_MAX_PLANES - 1];
-};
-
-/**
  * struct cam_cmd_mem_region_info -
  *              Cmd buffer region info
  *
@@ -768,127 +628,28 @@ struct cam_cmd_mem_regions {
 };
 
 /**
- * struct cam_reg_write_desc - Register write descriptor
- *
- * @offset               : Register offset at which 'value' needs to written
- * @value                : Register value to write
- */
-struct cam_reg_write_desc {
-	uint32_t   offset;
-	uint32_t   value;
-};
-
-/**
- * struct cam_reg_range_read_desc - Descriptor to provide read info
- *
- * @offset               : Register offset address to start with
- * @num_values           : Number of values to read
- */
-struct cam_reg_range_read_desc {
-	uint32_t   offset;
-	uint32_t   num_values;
-};
-
-/**
- * struct cam_dmi_read_desc - Descriptor to provide DMI read info
- *
- * @num_pre_writes       : Number of registers to write before reading DMI data
- * @num_post_writes      : Number of registers to write after reading DMI data
- * @pre_read_config      : Registers to write before reading DMI data
- * @dmi_data_read        : DMI Register, number of values to read to dump
- *                         DMI data
- * @post_read_config     : Registers to write after reading DMI data
- */
-struct cam_dmi_read_desc {
-	uint32_t                         num_pre_writes;
-	uint32_t                         num_post_writes;
-	struct cam_reg_write_desc        pre_read_config[
-						CAM_REG_DUMP_DMI_CONFIG_MAX];
-	struct cam_reg_range_read_desc   dmi_data_read;
-	struct cam_reg_write_desc        post_read_config[
-						CAM_REG_DUMP_DMI_CONFIG_MAX];
-};
-
-/**
- * struct cam_reg_read_info - Register read info for both reg continuous read
- *                            or DMI read
- *
- * @type                 : Whether Register range read or DMI read
- * @reg_read             : Range of registers to read
- * @dmi_read             : DMI data to read
- */
-struct cam_reg_read_info {
-	uint32_t                                type;
-	uint32_t                                reserved;
-	union {
-		struct cam_reg_range_read_desc  reg_read;
-		struct cam_dmi_read_desc        dmi_read;
-	};
-};
-
-/**
- * struct cam_reg_dump_out_buffer -Buffer info for dump data to be provided
- *
- * @req_id               : Request ID corresponding to reg dump data
- * @bytes_written        : Number of bytes written
- * @dump_data            : Register dump data
- */
-struct cam_reg_dump_out_buffer {
-	uint64_t   req_id;
-	uint32_t   bytes_written;
-	uint32_t   dump_data[1];
-};
-
-/**
- * struct cam_reg_dump_desc - Descriptor to provide dump info
- *
- * @reg_base_type        : Register base type, e.g. ISP_LEFT, ISP_RIGHT, CAMNOC
- * @dump_buffer_offset   : Offset from base of mem_handle at which Register dump
- *                         will be written for this set
- * @dump_buffer_size     : Available size in bytes for writing dump values
- * @num_read_range       : Number register range reads (Continuous + DMI)
- * @read_range           : Read range info
- */
-struct cam_reg_dump_desc {
-	uint32_t                   reg_base_type;
-	uint32_t                   dump_buffer_offset;
-	uint32_t                   dump_buffer_size;
-	uint32_t                   num_read_range;
-	struct cam_reg_read_info   read_range[1];
-};
-
-/**
- * struct cam_reg_dump_input_info - Info about required dump sets
- *
- * @num_dump_sets        : Number of different dump sets (base types) given
- * @dump_set_offsets     : Points to the given dump description structures
- *                         (cam_reg_dump_desc)
- */
-struct cam_reg_dump_input_info {
-	uint32_t                   num_dump_sets;
-	uint32_t                   dump_set_offsets[1];
-};
-
-/**
  * struct cam_dump_req_cmd -
  *        Dump the information of issue req id
  *
  * @issue_req_id   : Issue Request Id
- * @offset         : Offset for the buffer
- * @buf_handle     : Buffer Handle
- * @error_type     : Error type, using it, dumping information can be extended
  * @session_handle : Session Handle
  * @link_hdl       : link handle
  * @dev_handle     : Device Handle
+ * @error_type     : Error Type
+ * @buf_handle     : Buffer Handle
+ * @offset         : offset for the buffer
+ * @reserved       : Reserved
  */
 struct cam_dump_req_cmd {
-	uint64_t       issue_req_id;
-	size_t         offset;
-	uint32_t       buf_handle;
-	uint32_t       error_type;
+	int64_t        issue_req_id;
 	int32_t        session_handle;
 	int32_t        link_hdl;
 	int32_t        dev_handle;
+	int32_t        error_type;
+	uint32_t       buf_handle;
+	int32_t        offset;
+	uint32_t       reserved;
 };
+
 
 #endif /* __UAPI_CAM_DEFS_H__ */
