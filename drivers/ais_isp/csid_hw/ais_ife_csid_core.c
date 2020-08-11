@@ -1681,14 +1681,14 @@ static irqreturn_t ais_ife_csid_irq(int irq_num, void *data)
 	uint32_t sof_irq_debug_en = 0;
 	unsigned long flags;
 	uint32_t irq_status[CSID_IRQ_STATUS_MAX] = {};
-	struct timespec ts;
+	struct timespec64 ts;
 
 	if (!data) {
 		CAM_ERR(CAM_ISP, "CSID: Invalid arguments");
 		return IRQ_HANDLED;
 	}
 
-	get_monotonic_boottime64(&ts);
+	ktime_get_boottime_ts64(&ts);
 
 	csid_hw = (struct ais_ife_csid_hw *)data;
 	CAM_DBG(CAM_ISP, "CSID %d IRQ Handling", csid_hw->hw_intf->hw_idx);

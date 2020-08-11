@@ -488,6 +488,25 @@ static irqreturn_t bridge_irq(int irq_num, void *dev)
 	return IRQ_HANDLED;
 }
 
+static int32_t cam_sensor_get_intr_gpio(int32_t* gpio_num, struct cam_sensor_ctrl_t *s_ctrl)
+{
+	int32_t num = of_get_named_gpio(s_ctrl->soc_info.dev->of_node,
+		"sensor-intr-gpio", 0);
+
+	if (num < 0) {
+		CAM_ERR(CAM_SENSOR,
+				"sensor-intr-gpio not provided in device tree");
+		return -1;
+	}
+
+	if (gpio_num) {
+
+		*gpio_num = num;
+	}
+
+	return 0;
+}
+
 static int32_t cam_sensor_init_gpio_intr(
 	struct ais_sensor_gpio_intr_config *gpio_intr_info,
 	struct cam_sensor_ctrl_t *s_ctrl)
@@ -500,21 +519,19 @@ static int32_t cam_sensor_init_gpio_intr(
 	for (idx = 0; idx < AIS_MAX_INTR_GPIO; idx++) {
 		if (!s_ctrl->s_intr[idx].work_inited &&
 			gpio_intr_info->gpio_num != -1) {
+			/* gpio_intr_info->gpio_num is the TLMM pin num */
 			gpio_num = gpio_intr_info->gpio_num;
-
 			gpio_cfg0 = gpio_intr_info->gpio_cfg0;
 
 			s_ctrl->s_intr[idx].sctrl = s_ctrl;
 
-			s_ctrl->s_intr[idx].gpio_array[0].gpio = gpio_num;
-
 			INIT_WORK(&s_ctrl->s_intr[idx].irq_work,
 				bridge_irq_work);
 
-			rc = gpio_request_one(gpio_num,
-						GPIOF_DIR_IN, "camera_intr");
-
+			/* get the gpio num from devicetree, don't use the passed gpio_num from userspace */
+			rc = cam_sensor_get_intr_gpio(&gpio_num, s_ctrl);
 			if (!rc) {
+				s_ctrl->s_intr[idx].gpio_array[0].gpio = gpio_num;
 				rc = request_irq(gpio_to_irq(gpio_num),
 					bridge_irq,
 					IRQF_ONESHOT | gpio_cfg0,
@@ -1280,6 +1297,7 @@ free_probe_cmd:
 	}
 		break;
 	case AIS_SENSOR_INTR_INIT: {
+
 		struct ais_sensor_gpio_intr_config
 			*gpio_intr_cfg;
 
@@ -1307,6 +1325,7 @@ free_probe_cmd:
 
 		if (rc < 0)
 			CAM_ERR(CAM_SENSOR, "Failed in Updating intr Info");
+
 
 free_gpio_intr_init_config:
 		kfree(gpio_intr_cfg);

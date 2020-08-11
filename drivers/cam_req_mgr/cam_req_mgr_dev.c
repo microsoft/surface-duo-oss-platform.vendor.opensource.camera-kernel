@@ -13,6 +13,10 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/platform_device.h>
+#include <linux/highmem.h>
+
+#include <mm/slab.h>
+
 #include <media/v4l2-fh.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-event.h>
@@ -26,7 +30,7 @@
 #include "cam_mem_mgr.h"
 #include "cam_debug_util.h"
 #include "cam_common_util.h"
-#include <linux/slub_def.h>
+#include "cam_compat.h"
 
 #define CAM_REQ_MGR_EVENT_MAX 30
 
@@ -527,6 +531,7 @@ static int cam_video_device_setup(void)
 
 	g_dev.video = video_device_alloc();
 	if (!g_dev.video) {
+		CAM_ERR(CAM_CRM, "video_device_alloc failed");
 		rc = -ENOMEM;
 		goto video_fail;
 	}
@@ -540,13 +545,18 @@ static int cam_video_device_setup(void)
 	g_dev.video->ioctl_ops = &g_cam_ioctl_ops;
 	g_dev.video->minor = -1;
 	g_dev.video->vfl_type = VFL_TYPE_GRABBER;
+	g_dev.video->device_caps = V4L2_CAP_VIDEO_CAPTURE;
 	rc = video_register_device(g_dev.video, VFL_TYPE_GRABBER, -1);
-	if (rc)
+	if (rc) {
+		CAM_ERR(CAM_CRM, "video_register_device failed rc=%d",rc);
 		goto v4l2_fail;
+	}
 
 	rc = media_entity_pads_init(&g_dev.video->entity, 0, NULL);
-	if (rc)
+	if (rc) {
+		CAM_ERR(CAM_CRM, "media_entity_pads_init failed");
 		goto entity_fail;
+	}
 
 	g_dev.video->entity.function = CAM_VNODE_DEVICE_TYPE;
 	g_dev.video->entity.name = video_device_node_name(g_dev.video);
@@ -636,6 +646,9 @@ int cam_register_subdev(struct cam_subdev *csd)
 	if (rc) {
 		CAM_ERR(CAM_CRM, "register subdev failed");
 		goto reg_fail;
+	}
+	else {
+		CAM_DBG(CAM_CRM, "register subdev %s type %d succeed", csd->name, csd->ent_function);
 	}
 	g_dev.count++;
 
@@ -743,7 +756,7 @@ static const struct of_device_id cam_req_mgr_dt_match[] = {
 	{.compatible = "qcom,cam-req-mgr"},
 	{}
 };
-MODULE_DEVICE_TABLE(of, cam_dt_match);
+//MODULE_DEVICE_TABLE(of, cam_dt_match);
 
 static struct platform_driver cam_req_mgr_driver = {
 	.probe = cam_req_mgr_probe,

@@ -814,7 +814,7 @@ int cam_hw_cdm_init(void *hw_priv,
 		msecs_to_jiffies(CAM_CDM_HW_RESET_TIMEOUT));
 
 	if (time_left <= 0) {
-		CAM_ERR(CAM_CDM, "CDM HW reset Wait failed rc=%d", rc);
+		CAM_ERR(CAM_CDM, "CDM HW reset Wait failed");
 		goto disable_return;
 	} else {
 		CAM_DBG(CAM_CDM, "CDM Init success");
@@ -941,11 +941,6 @@ int cam_hw_cdm_probe(struct platform_device *pdev)
 	cam_smmu_set_client_page_fault_handler(cdm_core->iommu_hdl.non_secure,
 		cam_hw_cdm_iommu_fault_handler, cdm_hw);
 
-	rc = cam_smmu_ops(cdm_core->iommu_hdl.non_secure, CAM_SMMU_ATTACH);
-	if (rc < 0) {
-		CAM_ERR(CAM_CDM, "Attach iommu non secure handle failed");
-		goto destroy_non_secure_hdl;
-	}
 	cdm_core->iommu_hdl.secure = -1;
 
 	cdm_core->work_queue = alloc_workqueue(cdm_core->name,

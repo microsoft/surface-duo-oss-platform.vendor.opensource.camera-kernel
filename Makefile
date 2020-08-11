@@ -37,17 +37,32 @@ LINUXINCLUDE    += \
 		-include $(srctree)/techpack/camera/config/lahainacameraconf.h
 endif
 
-ifneq (,$(filter $(CONFIG_SPECTRA_CAMERA), y m))
+ifeq ($(CONFIG_ARCH_SM8150), y)
+include $(srctree)/techpack/ais/config/hanacamera.conf
+endif
+
+ifeq ($(CONFIG_ARCH_SM8150), y)
+LINUXINCLUDE += \
+		-include $(srctree)/techpack/ais/config/hanacameraconf.h
+endif
+
+
+ifeq ($(CONFIG_MSM_AIS), y)
 # Use USERINCLUDE when you must reference the UAPI directories only.
-USERINCLUDE     += \
-                -I$(srctree)/techpack/camera/include/uapi
+USERINCLUDE += \
+                -I$(srctree)/techpack/ais/include/uapi
 
 # Use LINUXINCLUDE when you must reference the include/ directory.
 # Needed to be compatible with the O= option
-LINUXINCLUDE    += \
-                -I$(srctree)/techpack/camera/include/uapi \
-                -I$(srctree)/techpack/camera/include
+LINUXINCLUDE += \
+                -I$(srctree)/techpack/ais/include/uapi \
+                -I$(srctree)/techpack/ais/include \
+                -I$(srctree) \
+                -I$(srctree)/include
 obj-y += drivers/
+
 else
 $(info Target not found)
 endif
+
+

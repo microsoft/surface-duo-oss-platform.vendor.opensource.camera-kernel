@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -18,7 +18,7 @@
 #include "cam_debug_util.h"
 
 int cam_common_util_get_string_index(const char **strings,
-	uint32_t num_strings, char *matching_string, uint32_t *index)
+	uint32_t num_strings, const char *matching_string, uint32_t *index)
 {
 	int i;
 
@@ -65,6 +65,8 @@ uint64_t cam_common_util_get_time_diff(struct timeval *t1, struct timeval *t2)
 	return diff;
 }
 
+
+#ifndef AUTO_CAMERA_KERNEL5_4
 void cam_common_util_get_curr_timestamp(struct timeval *time_stamp)
 {
 	struct timespec ts;
@@ -74,3 +76,18 @@ void cam_common_util_get_curr_timestamp(struct timeval *time_stamp)
 	time_stamp->tv_usec   = ts.tv_nsec/1000;
 }
 
+#else
+void cam_common_util_get_curr_timestamp(struct timeval *time_stamp)
+{
+	ktime_t   cur_time;
+	struct timespec ts;
+
+	cur_time = ktime_get();
+
+	ts = ktime_to_timespec(cur_time);
+
+	time_stamp->tv_sec    = ts.tv_sec;
+	time_stamp->tv_usec   = ts.tv_nsec/1000;
+}
+
+#endif

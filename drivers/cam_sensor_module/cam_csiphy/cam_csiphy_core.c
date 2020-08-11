@@ -11,19 +11,22 @@
  */
 
 #include <linux/module.h>
+
+//#include <dt-bindings/msm/msm-camera.h>
+
+#include "cam_compat.h"
 #include "cam_csiphy_core.h"
 #include "cam_csiphy_dev.h"
 #include "cam_csiphy_soc.h"
 #include "cam_common_util.h"
 #include "cam_packet_util.h"
+#include "cam_mem_mgr.h"
 
-
-#include <soc/qcom/scm.h>
-#include <cam_mem_mgr.h>
-
+#if KERNEL_VERSION(5, 4, 0) > LINUX_VERSION_CODE
 #define SCM_SVC_CAMERASS 0x18
 #define SECURE_SYSCALL_ID 0x6
 #define SECURE_SYSCALL_ID_2 0x7
+#endif
 
 #define LANE_MASK_2PH 0x1F
 #define LANE_MASK_3PH 0x7
@@ -31,6 +34,26 @@
 static int csiphy_dump;
 module_param(csiphy_dump, int, 0644);
 
+#if KERNEL_VERSION(5, 4, 0) <= LINUX_VERSION_CODE
+static int cam_csiphy_notify_secure_mode(struct csiphy_device *csiphy_dev,
+	bool protect, int32_t offset)
+{
+
+	int rc = 0;
+
+	if (offset >= CSIPHY_MAX_INSTANCES) {
+		CAM_ERR(CAM_CSIPHY, "Invalid CSIPHY offset");
+		rc = -EINVAL;
+	} else if (qcom_scm_camera_protect_phy_lanes(protect,
+			csiphy_dev->csiphy_cpas_cp_reg_mask[offset])) {
+		CAM_ERR(CAM_CSIPHY, "SCM call to hypervisor failed");
+		rc = -EINVAL;
+	}
+
+	return 0;
+}
+
+#else
 static int cam_csiphy_notify_secure_mode(struct csiphy_device *csiphy_dev,
 	bool protect, int32_t offset)
 {
@@ -53,6 +76,8 @@ static int cam_csiphy_notify_secure_mode(struct csiphy_device *csiphy_dev,
 
 	return 0;
 }
+
+#endif
 
 int32_t cam_csiphy_get_instance_offset(
 	struct csiphy_device *csiphy_dev,

@@ -93,7 +93,6 @@ int ais_ife_csid_probe(struct platform_device *pdev)
 	CAM_INFO(CAM_ISP, "CSID:%d probe successful",
 		csid_hw_intf->hw_idx);
 
-
 	if (csid_hw_intf->hw_idx < AIS_IFE_CSID_HW_RES_MAX)
 		ais_ife_csid_hw_list[csid_hw_intf->hw_idx] = csid_hw_intf;
 	else

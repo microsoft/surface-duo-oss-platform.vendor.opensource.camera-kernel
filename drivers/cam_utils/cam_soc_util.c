@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -384,6 +384,7 @@ long cam_soc_util_get_clk_round_rate(struct cam_hw_soc_info *soc_info,
 	return clk_round_rate(soc_info->clk[clk_index], clk_rate);
 }
 
+#ifndef AUTO_CAMERA_KERNEL5_4
 int cam_soc_util_set_clk_flags(struct cam_hw_soc_info *soc_info,
 	uint32_t clk_index, unsigned long flags)
 {
@@ -395,6 +396,7 @@ int cam_soc_util_set_clk_flags(struct cam_hw_soc_info *soc_info,
 
 	return clk_set_flags(soc_info->clk[clk_index], flags);
 }
+#endif
 
 /**
  * cam_soc_util_set_clk_rate()

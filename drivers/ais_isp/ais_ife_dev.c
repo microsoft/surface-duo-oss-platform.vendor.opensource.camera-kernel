@@ -569,12 +569,6 @@ static int ais_ife_dev_probe(struct platform_device *pdev)
 		goto unregister;
 	}
 
-	rc = cam_smmu_ops(p_ife_dev->iommu_hdl, CAM_SMMU_ATTACH);
-	if (rc && rc != -EALREADY) {
-		CAM_ERR(CAM_ISP, "Attach iommu handle failed %d", rc);
-		goto attach_fail;
-	}
-
 	rc = cam_smmu_get_handle("cam-secure",
 		&p_ife_dev->iommu_hdl_secure);
 	if (rc) {
@@ -615,9 +609,6 @@ static int ais_ife_dev_probe(struct platform_device *pdev)
 	return 0;
 
 secure_fail:
-	cam_smmu_ops(p_ife_dev->iommu_hdl,
-		CAM_SMMU_DETACH);
-attach_fail:
 	cam_smmu_destroy_handle(p_ife_dev->iommu_hdl);
 	p_ife_dev->iommu_hdl = -1;
 unregister:

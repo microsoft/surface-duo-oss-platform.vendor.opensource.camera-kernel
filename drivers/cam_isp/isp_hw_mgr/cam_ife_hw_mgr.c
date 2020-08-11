@@ -14,8 +14,9 @@
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/debugfs.h>
-#include <soc/qcom/scm.h>
-#include <uapi/media/cam_isp.h>
+
+#include <media/cam_isp.h>
+#include "cam_compat.h"
 #include "cam_smmu_api.h"
 #include "cam_req_mgr_workq.h"
 #include "cam_isp_hw_mgr_intf.h"
@@ -61,6 +62,31 @@ static uint32_t blob_type_hw_cmd_map[CAM_ISP_GENERIC_BLOB_TYPE_MAX] = {
 
 static struct cam_ife_hw_mgr g_ife_hw_mgr;
 
+#if KERNEL_VERSION(5, 4, 0) <= LINUX_VERSION_CODE
+
+static int cam_ife_notify_safe_lut_scm(bool safe_trigger)
+{
+	const uint32_t smmu_se_ife = 0;
+	uint32_t camera_hw_version, rc = 0;
+
+	rc = cam_cpas_get_cpas_hw_version(&camera_hw_version);
+	if (!rc && qcom_scm_smmu_notify_secure_lut(smmu_se_ife, safe_trigger)) {
+		switch (camera_hw_version) {
+		case CAM_CPAS_TITAN_170_V100:
+		case CAM_CPAS_TITAN_170_V110:
+		case CAM_CPAS_TITAN_175_V100:
+			CAM_ERR(CAM_ISP, "scm call to enable safe failed");
+			rc = -EINVAL;
+			break;
+		default:
+			break;
+		}
+	}
+
+	return rc;
+}
+
+#else
 static int cam_ife_notify_safe_lut_scm(bool safe_trigger)
 {
 	uint32_t camera_hw_version, rc = 0;
@@ -92,6 +118,9 @@ static int cam_ife_notify_safe_lut_scm(bool safe_trigger)
 
 	return rc;
 }
+
+
+#endif
 
 static int cam_ife_mgr_get_hw_caps(void *hw_mgr_priv,
 	void *hw_caps_args)
@@ -6337,12 +6366,6 @@ int cam_ife_hw_mgr_init(struct cam_hw_mgr_intf *hw_mgr_intf, int *iommu_hdl)
 		return -EINVAL;
 	}
 
-	if (cam_smmu_ops(g_ife_hw_mgr.mgr_common.img_iommu_hdl,
-		CAM_SMMU_ATTACH)) {
-		CAM_ERR(CAM_ISP, "Attach iommu handle failed.");
-		goto attach_fail;
-	}
-
 	if (cam_smmu_get_handle("cam-secure",
 		&g_ife_hw_mgr.mgr_common.img_iommu_hdl_secure)) {
 		CAM_ERR(CAM_ISP, "Failed to get secure iommu handle");
@@ -6459,9 +6482,6 @@ end:
 		g_ife_hw_mgr.mgr_common.img_iommu_hdl_secure);
 	g_ife_hw_mgr.mgr_common.img_iommu_hdl_secure = -1;
 secure_fail:
-	cam_smmu_ops(g_ife_hw_mgr.mgr_common.img_iommu_hdl,
-		CAM_SMMU_DETACH);
-attach_fail:
 	cam_smmu_destroy_handle(g_ife_hw_mgr.mgr_common.img_iommu_hdl);
 	g_ife_hw_mgr.mgr_common.img_iommu_hdl = -1;
 	return rc;

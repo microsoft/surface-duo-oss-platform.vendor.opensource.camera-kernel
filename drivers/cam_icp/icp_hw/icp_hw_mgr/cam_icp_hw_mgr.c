@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -501,12 +501,13 @@ static int32_t cam_icp_ctx_timer(void *priv, void *data)
 	return 0;
 }
 
-static void cam_icp_ctx_timer_cb(unsigned long data)
+static void cam_icp_ctx_timer_cb(struct timer_list *timer_data)
 {
 	unsigned long flags;
 	struct crm_workq_task *task;
 	struct clk_work_data *task_data;
-	struct cam_req_mgr_timer *timer = (struct cam_req_mgr_timer *)data;
+	struct cam_req_mgr_timer *timer =
+		container_of(timer_data, struct cam_req_mgr_timer, sys_timer);
 
 	spin_lock_irqsave(&icp_hw_mgr.hw_mgr_lock, flags);
 	task = cam_req_mgr_workq_get_task(icp_hw_mgr.timer_work);
@@ -525,12 +526,13 @@ static void cam_icp_ctx_timer_cb(unsigned long data)
 	spin_unlock_irqrestore(&icp_hw_mgr.hw_mgr_lock, flags);
 }
 
-static void cam_icp_device_timer_cb(unsigned long data)
+static void cam_icp_device_timer_cb(struct timer_list *timer_data)
 {
 	unsigned long flags;
 	struct crm_workq_task *task;
 	struct clk_work_data *task_data;
-	struct cam_req_mgr_timer *timer = (struct cam_req_mgr_timer *)data;
+	struct cam_req_mgr_timer *timer =
+		container_of(timer_data, struct cam_req_mgr_timer, sys_timer);
 
 	spin_lock_irqsave(&icp_hw_mgr.hw_mgr_lock, flags);
 	task = cam_req_mgr_workq_get_task(icp_hw_mgr.timer_work);
@@ -2997,13 +2999,18 @@ static int cam_icp_mgr_fw_download(struct cam_icp_hw_mgr *hw_mgr)
 		a5_dev_intf->hw_priv,
 		CAM_ICP_A5_CMD_FW_DOWNLOAD,
 		NULL, 0);
+
+	CAM_INFO(CAM_ICP, "cam_icp_mgr_fw_download succeed");
+
 	if (rc)
 		goto fw_download_failed;
 
 	return rc;
 fw_download_failed:
 	cam_hfi_disable_cpu(a5_dev->soc_info.reg_map[A5_SIERRA_BASE].mem_base);
+
 set_irq_failed:
+
 	return rc;
 }
 
@@ -3181,6 +3188,7 @@ static int cam_icp_mgr_hw_open(void *hw_mgr_priv, void *download_fw_args)
 		CAM_ERR(CAM_ICP, "a5_dev_intf is invalid");
 		return -EINVAL;
 	}
+
 	a5_dev = (struct cam_hw_info *)a5_dev_intf->hw_priv;
 	rc = cam_icp_allocate_hfi_mem();
 	if (rc)
@@ -3206,8 +3214,6 @@ static int cam_icp_mgr_hw_open(void *hw_mgr_priv, void *download_fw_args)
 	hw_mgr->fw_download = true;
 	atomic_set(&hw_mgr->recovery, 0);
 
-	CAM_INFO(CAM_ICP, "FW download done successfully");
-
 	rc = cam_ipe_bps_deint(hw_mgr);
 	if (download_fw_args)
 		icp_pc = *((bool *)download_fw_args);
@@ -3232,10 +3238,13 @@ fw_init_failed:
 hfi_init_failed:
 	cam_hfi_disable_cpu(
 		a5_dev->soc_info.reg_map[A5_SIERRA_BASE].mem_base);
+
 fw_download_failed:
 	cam_icp_mgr_device_deinit(hw_mgr);
+
 dev_init_fail:
 	cam_icp_free_hfi_mem();
+
 alloc_hfi_mem_failed:
 	return rc;
 }
@@ -5173,6 +5182,8 @@ static int cam_icp_mgr_init_devs(struct device_node *of_node)
 			of_node_put(child_node);
 			if (!icp_hw_mgr.ipe1_enable)
 				continue;
+
+			CAM_ERR(CAM_ICP, "compat_hw_name_failed");
 			goto compat_hw_name_failed;
 		}
 		icp_hw_mgr.devices[child_dev_intf->hw_type]
@@ -5475,12 +5486,6 @@ int cam_icp_hw_mgr_init(struct device_node *of_node, uint64_t *hw_mgr_hdl,
 		goto icp_get_hdl_failed;
 	}
 
-	rc = cam_smmu_ops(icp_hw_mgr.iommu_hdl, CAM_SMMU_ATTACH);
-	if (rc) {
-		CAM_ERR(CAM_ICP, "icp attach failed: %d", rc);
-		goto icp_attach_failed;
-	}
-
 	rc = cam_smmu_get_handle("cam-secure", &icp_hw_mgr.iommu_sec_hdl);
 	if (rc) {
 		CAM_ERR(CAM_ICP, "get secure mmu handle failed: %d", rc);
@@ -5501,8 +5506,6 @@ icp_wq_create_failed:
 	cam_smmu_destroy_handle(icp_hw_mgr.iommu_sec_hdl);
 	icp_hw_mgr.iommu_sec_hdl = -1;
 secure_hdl_failed:
-	cam_smmu_ops(icp_hw_mgr.iommu_hdl, CAM_SMMU_DETACH);
-icp_attach_failed:
 	cam_smmu_destroy_handle(icp_hw_mgr.iommu_hdl);
 	icp_hw_mgr.iommu_hdl = -1;
 icp_get_hdl_failed:

@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -13,12 +13,11 @@
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/mutex.h>
-#include <linux/msm_ion.h>
 #include <linux/slab.h>
-#include <asm/cacheflush.h>
-#include <linux/ion_kernel.h>
 #include <linux/dma-buf.h>
+#include <linux/version.h>
 
+#include "cam_compat.h"
 #include "cam_req_mgr_util.h"
 #include "cam_mem_mgr.h"
 #include "cam_smmu_api.h"

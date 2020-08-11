@@ -21,10 +21,11 @@
 #include <linux/i2c.h>
 #include <linux/spi/spi.h>
 #include <linux/regulator/consumer.h>
-#include <linux/clk/qcom.h>
 #include <linux/debugfs.h>
+#include <linux/of_fdt.h>
 
 #include "cam_io_util.h"
+#include <media/cam_defs.h>
 
 #define NO_SET_RATE  -1
 #define INIT_RATE    -2
@@ -376,8 +377,10 @@ long cam_soc_util_get_clk_round_rate(struct cam_hw_soc_info *soc_info,
  *
  * @return:             Success or Failure
  */
+#ifndef AUTO_CAMERA_KERNEL5_4
 int cam_soc_util_set_clk_flags(struct cam_hw_soc_info *soc_info,
 	 uint32_t clk_index, unsigned long flags);
+#endif
 
 /**
  * cam_soc_util_set_src_clk_rate()

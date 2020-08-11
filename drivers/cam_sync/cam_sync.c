@@ -1170,6 +1170,7 @@ static int cam_sync_probe(struct platform_device *pdev)
 	sync_dev->vdev->fops     = &cam_sync_v4l2_fops;
 	sync_dev->vdev->ioctl_ops = &g_cam_sync_ioctl_ops;
 	sync_dev->vdev->minor     = -1;
+	sync_dev->vdev->device_caps = V4L2_CAP_VIDEO_CAPTURE;
 	sync_dev->vdev->vfl_type  = VFL_TYPE_GRABBER;
 	rc = video_register_device(sync_dev->vdev,
 		VFL_TYPE_GRABBER, -1);

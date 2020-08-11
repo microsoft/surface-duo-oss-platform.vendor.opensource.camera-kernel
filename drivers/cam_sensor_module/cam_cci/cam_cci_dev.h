@@ -14,14 +14,12 @@
 #define _CAM_CCI_DEV_H_
 
 #include <linux/delay.h>
-#include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_gpio.h>
 #include <linux/of_platform.h>
 #include <linux/module.h>
 #include <linux/irqreturn.h>
-#include <linux/ion.h>
 #include <linux/iommu.h>
 #include <linux/timer.h>
 #include <linux/kernel.h>
@@ -34,7 +32,7 @@
 #include <cam_sensor_cmn_header.h>
 #include <cam_io_util.h>
 #include <cam_sensor_util.h>
-#include <cam_subdev.h>
+#include "cam_subdev.h"
 #include <cam_cpas_api.h>
 #include "cam_cci_hwreg.h"
 #include "cam_soc_util.h"
@@ -50,9 +48,6 @@
 
 #define NUM_MASTERS 2
 #define NUM_QUEUES 2
-
-#define TRUE  1
-#define FALSE 0
 
 #define CCI_PINCTRL_STATE_DEFAULT "cci_default"
 #define CCI_PINCTRL_STATE_SLEEP "cci_suspend"

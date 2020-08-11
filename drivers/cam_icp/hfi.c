@@ -1,4 +1,4 @@
-/* Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -18,7 +18,7 @@
 #include <linux/timer.h>
 #include <media/cam_icp.h>
 #include <linux/iopoll.h>
-#include <soc/qcom/socinfo.h>
+//#include <soc/qcom/socinfo.h>
 
 #include "cam_io_util.h"
 #include "hfi_reg.h"
@@ -652,7 +652,7 @@ int cam_hfi_init(uint8_t event_driven_mode, struct hfi_mem_info *hfi_mem,
 	struct hfi_qtbl *qtbl;
 	struct hfi_qtbl_hdr *qtbl_hdr;
 	struct hfi_q_hdr *cmd_q_hdr, *msg_q_hdr, *dbg_q_hdr;
-	uint32_t hw_version, soc_version, fw_version, status = 0;
+	uint32_t hw_version, fw_version, status = 0;
 	uint32_t retry_cnt = 0;
 	struct sfr_buf *sfr_buffer;
 
@@ -674,7 +674,7 @@ int cam_hfi_init(uint8_t event_driven_mode, struct hfi_mem_info *hfi_mem,
 
 	memcpy(&g_hfi->map, hfi_mem, sizeof(g_hfi->map));
 	g_hfi->hfi_state = HFI_DEINIT;
-	soc_version = socinfo_get_version();
+
 	if (debug) {
 		cam_io_w_mb(
 		(uint32_t)(ICP_FLAG_CSR_A5_EN | ICP_FLAG_CSR_WAKE_UP_EN |
@@ -692,9 +692,9 @@ int cam_hfi_init(uint8_t event_driven_mode, struct hfi_mem_info *hfi_mem,
 		 * hardware team root causes this
 		 */
 		cam_io_w_mb((uint32_t)ICP_FLAG_CSR_A5_EN |
-			ICP_FLAG_CSR_WAKE_UP_EN |
-			ICP_CSR_EN_CLKGATE_WFI,
-			icp_base + HFI_REG_A5_CSR_A5_CONTROL);
+				ICP_FLAG_CSR_WAKE_UP_EN |
+				ICP_CSR_EN_CLKGATE_WFI,
+				icp_base + HFI_REG_A5_CSR_A5_CONTROL);
 	}
 
 	qtbl = (struct hfi_qtbl *)hfi_mem->qtbl.kva;
@@ -813,16 +813,22 @@ int cam_hfi_init(uint8_t event_driven_mode, struct hfi_mem_info *hfi_mem,
 
 	cam_io_w_mb((uint32_t)hfi_mem->qtbl.iova,
 		icp_base + HFI_REG_QTBL_PTR);
+
 	cam_io_w_mb((uint32_t)hfi_mem->sfr_buf.iova,
 		icp_base + HFI_REG_SFR_PTR);
+
 	cam_io_w_mb((uint32_t)hfi_mem->shmem.iova,
 		icp_base + HFI_REG_SHARED_MEM_PTR);
+
 	cam_io_w_mb((uint32_t)hfi_mem->shmem.len,
 		icp_base + HFI_REG_SHARED_MEM_SIZE);
+
 	cam_io_w_mb((uint32_t)hfi_mem->sec_heap.iova,
 		icp_base + HFI_REG_UNCACHED_HEAP_PTR);
+
 	cam_io_w_mb((uint32_t)hfi_mem->sec_heap.len,
 		icp_base + HFI_REG_UNCACHED_HEAP_SIZE);
+
 	cam_io_w_mb((uint32_t)ICP_INIT_REQUEST_SET,
 		icp_base + HFI_REG_HOST_ICP_INIT_REQUEST);
 	cam_io_w_mb((uint32_t)hfi_mem->qdss.iova,

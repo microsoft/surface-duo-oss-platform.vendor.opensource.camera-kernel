@@ -12,19 +12,21 @@
 
 #include <linux/module.h>
 #include <linux/dma-buf.h>
-#include <asm/dma-iommu.h>
 #include <linux/dma-direction.h>
 #include <linux/of_platform.h>
 #include <linux/iommu.h>
 #include <linux/slab.h>
 #include <linux/dma-mapping.h>
+#include <linux/of_address.h>
 #include <linux/msm_dma_iommu_mapping.h>
 #include <linux/workqueue.h>
 #include <linux/genalloc.h>
-#include <soc/qcom/scm.h>
-#include <soc/qcom/secure_buffer.h>
-#include <uapi/media/cam_req_mgr.h>
 #include <linux/debugfs.h>
+#include <soc/qcom/secure_buffer.h>
+
+#include <media/cam_req_mgr.h>
+
+#include "cam_compat.h"
 #include "cam_smmu_api.h"
 #include "cam_debug_util.h"
 
@@ -44,13 +46,7 @@
 static int g_num_pf_handled = 4;
 module_param(g_num_pf_handled, int, 0644);
 
-struct firmware_alloc_info {
-	struct device *fw_dev;
-	void *fw_kva;
-	dma_addr_t fw_dma_hdl;
-};
-
-struct firmware_alloc_info icp_fw;
+struct cam_fw_alloc_info icp_fw;
 
 struct cam_smmu_work_payload {
 	int idx;
@@ -101,7 +97,7 @@ struct secheap_buf_info {
 
 struct cam_context_bank_info {
 	struct device *dev;
-	struct dma_iommu_mapping *mapping;
+	struct iommu_domain *domain;
 	dma_addr_t va_start;
 	size_t va_len;
 	const char *name;
@@ -688,7 +684,7 @@ static int cam_smmu_attach_device(int idx)
 	struct cam_context_bank_info *cb = &iommu_cb_set.cb_info[idx];
 
 	/* attach the mapping to device */
-	rc = arm_iommu_attach_device(cb->dev, cb->mapping);
+	rc = iommu_attach_device(cb->domain, cb->dev);
 	if (rc < 0) {
 		CAM_ERR(CAM_SMMU, "Error: ARM IOMMU attach failed. ret = %d",
 			rc);
@@ -1026,7 +1022,7 @@ static int cam_smmu_detach_device(int idx)
 	if (iommu_cb_set.cb_info[idx].state == CAM_SMMU_DETACH) {
 		rc = -EALREADY;
 	} else if (iommu_cb_set.cb_info[idx].state == CAM_SMMU_ATTACH) {
-		arm_iommu_detach_device(cb->dev);
+		iommu_detach_device(cb->domain, cb->dev);
 		iommu_cb_set.cb_info[idx].state = CAM_SMMU_DETACH;
 	}
 
@@ -1158,23 +1154,19 @@ int cam_smmu_alloc_firmware(int32_t smmu_hdl,
 	firmware_start = iommu_cb_set.cb_info[idx].firmware_info.iova_start;
 	CAM_DBG(CAM_SMMU, "Firmware area len from DT = %zu", firmware_len);
 
-	icp_fw.fw_kva = dma_alloc_coherent(icp_fw.fw_dev,
-		firmware_len,
-		&icp_fw.fw_dma_hdl,
-		GFP_KERNEL);
-	if (!icp_fw.fw_kva) {
-		CAM_ERR(CAM_SMMU, "FW memory alloc failed");
-		rc = -ENOMEM;
+	rc = cam_reserve_icp_fw(&icp_fw, firmware_len);
+	if (rc) {
+		CAM_ERR(CAM_SMMU, "cam_reserve_icp_fw failed %d", rc);
 		goto unlock_and_end;
-	} else {
-		CAM_DBG(CAM_SMMU, "DMA alloc returned fw = %pK, hdl = %pK",
-			icp_fw.fw_kva, (void *)icp_fw.fw_dma_hdl);
 	}
+	else
+		CAM_DBG(CAM_SMMU, "DMA alloc returned fw = %pK, hdl = %pK",
+			icp_fw.fw_kva, (void *)icp_fw.fw_hdl);
 
-	domain = iommu_cb_set.cb_info[idx].mapping->domain;
+	domain = iommu_cb_set.cb_info[idx].domain;
 	rc = iommu_map(domain,
 		firmware_start,
-		icp_fw.fw_dma_hdl,
+		(phys_addr_t) icp_fw.fw_hdl,
 		firmware_len,
 		IOMMU_READ|IOMMU_WRITE|IOMMU_PRIV);
 
@@ -1193,10 +1185,7 @@ int cam_smmu_alloc_firmware(int32_t smmu_hdl,
 	return rc;
 
 alloc_fail:
-	dma_free_coherent(icp_fw.fw_dev,
-		firmware_len,
-		icp_fw.fw_kva,
-		icp_fw.fw_dma_hdl);
+	cam_unreserve_icp_fw(&icp_fw, firmware_len);
 unlock_and_end:
 	mutex_unlock(&iommu_cb_set.cb_info[idx].lock);
 end:
@@ -1244,7 +1233,7 @@ int cam_smmu_dealloc_firmware(int32_t smmu_hdl)
 
 	firmware_len = iommu_cb_set.cb_info[idx].firmware_info.iova_len;
 	firmware_start = iommu_cb_set.cb_info[idx].firmware_info.iova_start;
-	domain = iommu_cb_set.cb_info[idx].mapping->domain;
+	domain = iommu_cb_set.cb_info[idx].domain;
 	unmapped = iommu_unmap(domain,
 		firmware_start,
 		firmware_len);
@@ -1256,13 +1245,10 @@ int cam_smmu_dealloc_firmware(int32_t smmu_hdl)
 		rc = -EINVAL;
 	}
 
-	dma_free_coherent(icp_fw.fw_dev,
-		firmware_len,
-		icp_fw.fw_kva,
-		icp_fw.fw_dma_hdl);
+	cam_unreserve_icp_fw(&icp_fw, firmware_len);
 
-	icp_fw.fw_kva = 0;
-	icp_fw.fw_dma_hdl = 0;
+	icp_fw.fw_kva = NULL;
+	icp_fw.fw_hdl = 0;
 
 	iommu_cb_set.cb_info[idx].is_fw_allocated = false;
 
@@ -1317,7 +1303,7 @@ int cam_smmu_alloc_qdss(int32_t smmu_hdl,
 	qdss_phy_addr = iommu_cb_set.cb_info[idx].qdss_phy_addr;
 	CAM_DBG(CAM_SMMU, "QDSS area len from DT = %zu", qdss_len);
 
-	domain = iommu_cb_set.cb_info[idx].mapping->domain;
+	domain = iommu_cb_set.cb_info[idx].domain;
 	rc = iommu_map(domain,
 		qdss_start,
 		qdss_phy_addr,
@@ -1384,7 +1370,7 @@ int cam_smmu_dealloc_qdss(int32_t smmu_hdl)
 
 	qdss_len = iommu_cb_set.cb_info[idx].qdss_info.iova_len;
 	qdss_start = iommu_cb_set.cb_info[idx].qdss_info.iova_start;
-	domain = iommu_cb_set.cb_info[idx].mapping->domain;
+	domain = iommu_cb_set.cb_info[idx].domain;
 	unmapped = iommu_unmap(domain, qdss_start, qdss_len);
 
 	if (unmapped != qdss_len) {
@@ -1590,7 +1576,7 @@ int cam_smmu_reserve_sec_heap(int32_t smmu_hdl,
 
 	sec_heap_iova = iommu_cb_set.cb_info[idx].secheap_info.iova_start;
 	sec_heap_iova_len = iommu_cb_set.cb_info[idx].secheap_info.iova_len;
-	size = iommu_map_sg(iommu_cb_set.cb_info[idx].mapping->domain,
+	size = iommu_map_sg(iommu_cb_set.cb_info[idx].domain,
 		sec_heap_iova,
 		secheap_buf->table->sgl,
 		secheap_buf->table->nents,
@@ -1654,7 +1640,7 @@ int cam_smmu_release_sec_heap(int32_t smmu_hdl)
 	sec_heap_iova = iommu_cb_set.cb_info[idx].secheap_info.iova_start;
 	sec_heap_iova_len = iommu_cb_set.cb_info[idx].secheap_info.iova_len;
 
-	size = iommu_unmap(iommu_cb_set.cb_info[idx].mapping->domain,
+	size = iommu_unmap(iommu_cb_set.cb_info[idx].domain,
 		sec_heap_iova,
 		sec_heap_iova_len);
 	if (size != sec_heap_iova_len) {
@@ -1714,7 +1700,7 @@ static int cam_smmu_map_buffer_validate(struct dma_buf *buf,
 			goto err_detach;
 		}
 
-		domain = iommu_cb_set.cb_info[idx].mapping->domain;
+		domain = iommu_cb_set.cb_info[idx].domain;
 		if (!domain) {
 			CAM_ERR(CAM_SMMU, "CB has no domain set");
 			goto err_unmap_sg;
@@ -1821,7 +1807,7 @@ err_alloc:
 			size,
 			iommu_cb_set.cb_info[idx].handle);
 
-		iommu_unmap(iommu_cb_set.cb_info[idx].mapping->domain,
+		iommu_unmap(iommu_cb_set.cb_info[idx].domain,
 			*paddr_ptr,
 			*len_ptr);
 	}
@@ -1914,7 +1900,7 @@ static int cam_smmu_unmap_buf_and_remove_from_list(
 			"Removing SHARED buffer paddr = %pK, len = %zu",
 			(void *)mapping_info->paddr, mapping_info->len);
 
-		domain = iommu_cb_set.cb_info[idx].mapping->domain;
+		domain = iommu_cb_set.cb_info[idx].domain;
 
 		size = iommu_unmap(domain,
 			mapping_info->paddr,
@@ -2142,7 +2128,7 @@ static int cam_smmu_alloc_scratch_buffer_add_to_list(int idx,
 
 
 	/* Get the domain from within our cb_set struct and map it*/
-	domain = iommu_cb_set.cb_info[idx].mapping->domain;
+	domain = iommu_cb_set.cb_info[idx].domain;
 
 	rc = cam_smmu_alloc_scratch_va(&iommu_cb_set.cb_info[idx].scratch_map,
 		virt_len, &iova);
@@ -2214,7 +2200,7 @@ static int cam_smmu_free_scratch_buffer_remove_from_list(
 	int rc = 0;
 	size_t unmapped;
 	struct iommu_domain *domain =
-		iommu_cb_set.cb_info[idx].mapping->domain;
+		iommu_cb_set.cb_info[idx].domain;
 	struct scratch_mapping *scratch_map =
 		&iommu_cb_set.cb_info[idx].scratch_map;
 
@@ -3163,12 +3149,8 @@ EXPORT_SYMBOL(cam_smmu_destroy_handle);
 
 static void cam_smmu_deinit_cb(struct cam_context_bank_info *cb)
 {
-	arm_iommu_detach_device(cb->dev);
-
-	if (cb->io_support && cb->mapping) {
-		arm_iommu_release_mapping(cb->mapping);
-		cb->mapping = NULL;
-	}
+	if (cb->io_support && cb->domain)
+		cb->domain = NULL;
 
 	if (cb->shared_support) {
 		gen_pool_destroy(cb->shared_mem_pool);
@@ -3247,21 +3229,14 @@ static int cam_smmu_setup_cb(struct cam_context_bank_info *cb,
 
 	/* create a virtual mapping */
 	if (cb->io_support) {
-		cb->mapping = arm_iommu_create_mapping(&platform_bus_type,
-			cb->io_info.iova_start, cb->io_info.iova_len);
-		if (IS_ERR(cb->mapping)) {
-			CAM_ERR(CAM_SMMU, "Error: create mapping Failed");
+		cb->domain = iommu_get_domain_for_dev(dev);
+		if (IS_ERR(cb->domain)) {
+			CAM_ERR(CAM_SMMU, "Error: create domain Failed");
 			rc = -ENODEV;
 			goto end;
 		}
 
-		iommu_cb_set.non_fatal_fault = smmu_fatal_flag;
-		if (iommu_domain_set_attr(cb->mapping->domain,
-			DOMAIN_ATTR_NON_FATAL_FAULTS,
-			&iommu_cb_set.non_fatal_fault) < 0) {
-			CAM_ERR(CAM_SMMU,
-				"Error: failed to set non fatal fault attribute");
-		}
+		cb->state = CAM_SMMU_ATTACH;
 
 	} else {
 		CAM_ERR(CAM_SMMU, "Context bank does not have IO region");
@@ -3520,10 +3495,11 @@ static int cam_populate_smmu_context_banks(struct device *dev,
 		CAM_ERR(CAM_SMMU, "Error: failed to setup cb : %s", cb->name);
 		goto cb_init_fail;
 	}
-	if (cb->io_support && cb->mapping)
-		iommu_set_fault_handler(cb->mapping->domain,
+	if (cb->io_support && cb->domain)
+		iommu_set_fault_handler(cb->domain,
 			cam_smmu_iommu_fault_handler,
 			(void *)cb->name);
+
 	/* increment count to next bank */
 	iommu_cb_set.cb_init_count++;
 
@@ -3544,8 +3520,19 @@ static int cam_smmu_probe(struct platform_device *pdev)
 			CAM_ERR(CAM_SMMU, "Error: allocating context banks");
 			return -ENOMEM;
 		}
+
+		/* probe through all the subdevices */
+		rc = of_platform_populate(pdev->dev.of_node, msm_cam_smmu_dt_match,
+					NULL, &pdev->dev);
+		if (rc < 0) {
+			CAM_ERR(CAM_SMMU, "Error: populating devices");
+		} else {
+			INIT_WORK(&iommu_cb_set.smmu_work, cam_smmu_page_fault_work);
+			mutex_init(&iommu_cb_set.payload_list_lock);
+			INIT_LIST_HEAD(&iommu_cb_set.payload_list);
+		}
 	}
-	if (of_device_is_compatible(dev->of_node, "qcom,msm-cam-smmu-cb")) {
+	else if (of_device_is_compatible(dev->of_node, "qcom,msm-cam-smmu-cb")) {
 		rc = cam_populate_smmu_context_banks(dev, CAM_ARM_SMMU);
 		if (rc < 0) {
 			CAM_ERR(CAM_SMMU, "Error: populating context banks");
@@ -3554,7 +3541,7 @@ static int cam_smmu_probe(struct platform_device *pdev)
 		}
 		return rc;
 	}
-	if (of_device_is_compatible(dev->of_node, "qcom,qsmmu-cam-cb")) {
+	else if (of_device_is_compatible(dev->of_node, "qcom,qsmmu-cam-cb")) {
 		rc = cam_populate_smmu_context_banks(dev, CAM_QSMMU);
 		if (rc < 0) {
 			CAM_ERR(CAM_SMMU, "Error: populating context banks");
@@ -3562,24 +3549,17 @@ static int cam_smmu_probe(struct platform_device *pdev)
 		}
 		return rc;
 	}
-
-	if (of_device_is_compatible(dev->of_node, "qcom,msm-cam-smmu-fw-dev")) {
+	else if (of_device_is_compatible(dev->of_node, "qcom,msm-cam-smmu-fw-dev")) {
 		icp_fw.fw_dev = &pdev->dev;
 		icp_fw.fw_kva = NULL;
-		icp_fw.fw_dma_hdl = 0;
+		icp_fw.fw_hdl = 0;
 		return rc;
 	}
-
-	/* probe through all the subdevices */
-	rc = of_platform_populate(pdev->dev.of_node, msm_cam_smmu_dt_match,
-				NULL, &pdev->dev);
-	if (rc < 0) {
-		CAM_ERR(CAM_SMMU, "Error: populating devices");
-	} else {
-		INIT_WORK(&iommu_cb_set.smmu_work, cam_smmu_page_fault_work);
-		mutex_init(&iommu_cb_set.payload_list_lock);
-		INIT_LIST_HEAD(&iommu_cb_set.payload_list);
+	else {
+		CAM_ERR(CAM_SMMU, "unsupported SMMU dev node");
+		return -1;
 	}
+
 
 	return rc;
 }

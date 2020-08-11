@@ -379,9 +379,9 @@ int ais_vfe_force_reset(void *hw_priv, void *reset_core_args, uint32_t arg_size)
 
 void ais_isp_hw_get_timestamp(struct ais_isp_timestamp *time_stamp)
 {
-	struct timespec ts;
+	struct timespec64 ts;
 
-	get_monotonic_boottime(&ts);
+	ktime_get_boottime_ts64(&ts);
 	time_stamp->mono_time.tv_sec    = ts.tv_sec;
 	time_stamp->mono_time.tv_usec   = ts.tv_nsec/1000;
 	time_stamp->time_usecs =  ts.tv_sec * 1000000 +
@@ -1136,9 +1136,6 @@ static int ais_vfe_dispatch_irq(struct cam_hw_info *vfe_hw,
 
 	core_info = (struct ais_vfe_hw_core_info *)vfe_hw->core_info;
 
-	CAM_DBG(CAM_ISP, "VFE[%d] event %d",
-		core_info->vfe_idx, work_data->evt_type);
-
 	task = cam_req_mgr_workq_get_task(core_info->workq);
 	if (!task) {
 		CAM_ERR(CAM_ISP, "Can not get task for worker");
@@ -1146,6 +1143,9 @@ static int ais_vfe_dispatch_irq(struct cam_hw_info *vfe_hw,
 	}
 	work_data = (struct ais_vfe_hw_work_data *)task->payload;
 	*work_data = *p_work;
+
+	CAM_DBG(CAM_ISP, "VFE[%d] event %d",
+		core_info->vfe_idx, work_data->evt_type);
 
 	task->process_cb = ais_vfe_process_irq_bh;
 	rc = cam_req_mgr_workq_enqueue_task(task, vfe_hw,
@@ -1194,7 +1194,7 @@ irqreturn_t ais_vfe_irq(int irq_num, void *data)
 		struct ais_vfe_hw_work_data work_data;
 		struct timespec64 ts;
 
-		get_monotonic_boottime64(&ts);
+		ktime_get_boottime_ts64(&ts);
 		work_data.ts =
 			(uint64_t)((ts.tv_sec * 1000000000) + ts.tv_nsec);
 
