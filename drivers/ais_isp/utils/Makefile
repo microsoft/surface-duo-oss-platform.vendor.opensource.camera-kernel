@@ -6,8 +6,4 @@ ccflags-y += -I$(srctree)/techpack/ais/drivers/cam_sync
 ccflags-y += -I$(srctree)/techpack/ais/drivers/cam_utils
 ccflags-y += -I$(srctree)/techpack/ais/drivers/cam_cdm/
 
-obj-$(CONFIG_MSM_AIS) += csid_hw/
-obj-$(CONFIG_MSM_AIS) += vfe_hw/
-obj-$(CONFIG_MSM_AIS) += utils/
-
-obj-$(CONFIG_MSM_AIS) += ais_ife_dev.o
+obj-$(CONFIG_MSM_AIS) += ais_isp_trace.o

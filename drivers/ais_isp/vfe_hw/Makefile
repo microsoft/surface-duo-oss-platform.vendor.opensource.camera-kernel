@@ -5,6 +5,7 @@ ccflags-y += -I$(srctree)/techpack/ais/drivers/cam_smmu/
 ccflags-y += -I$(srctree)/techpack/ais/drivers/cam_req_mgr/
 ccflags-y += -I$(srctree)/techpack/ais/drivers/ais_isp
 ccflags-y += -I$(srctree)/techpack/ais/drivers/ais_isp/include
+ccflags-y += -I$(srctree)/techpack/ais/drivers/ais_isp/utils
 ccflags-y += -I$(srctree)/techpack/ais/drivers/ais_isp/vfe_hw/include
 ccflags-y += -I$(srctree)/techpack/ais/drivers/ais_isp/vfe_hw/vfe_bus/include
 ccflags-y += -I$(srctree)/techpack/ais/drivers/ais_isp/vfe_hw/vfe_bus

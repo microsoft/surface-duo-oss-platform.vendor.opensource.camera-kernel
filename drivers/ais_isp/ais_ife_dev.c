@@ -272,7 +272,7 @@ static int ais_ife_driver_cmd(struct ais_ife_dev *p_ife_dev, void *arg)
 		struct ais_ife_rdi_init_args rdi_init;
 
 		if (cmd->size != sizeof(rdi_init)) {
-			CAM_ERR(CAM_ISP, "Invalid cmd size");
+			CAM_ERR(CAM_ISP, "Invalid cmd size expected %u received %u", sizeof(rdi_init), cmd->size);
 			rc = -EINVAL;
 		} else if (copy_from_user(&rdi_init,
 				u64_to_user_ptr(cmd->handle),
@@ -476,15 +476,11 @@ static int ais_ife_dev_cb(void *priv, struct ais_ife_event_data *evt_data)
 		return -EINVAL;
 	}
 
-	spin_lock_bh(&p_ife_dev->eventq_lock);
-
 	/* Queue the event */
 	memcpy(event.u.data, (void *)evt_data, sizeof(*evt_data));
 	event.id = V4L_EVENT_ID_AIS_IFE;
 	event.type = V4L_EVENT_TYPE_AIS_IFE;
 	v4l2_event_queue(p_ife_dev->cam_sd.sd.devnode, &event);
-
-	spin_unlock_bh(&p_ife_dev->eventq_lock);
 
 	return 0;
 }
@@ -502,7 +498,8 @@ static void ais_ife_dev_iommu_fault_handler(
 
 	p_ife_dev = (struct ais_ife_dev *)token;
 
-	CAM_ERR(CAM_ISP, "IFE%d Pagefault at %lu", p_ife_dev->hw_idx, iova);
+	CAM_ERR(CAM_ISP, "IFE%d Pagefault at iova 0x%x %u",
+		p_ife_dev->hw_idx, iova, domain->type);
 }
 
 static int ais_ife_dev_remove(struct platform_device *pdev)
@@ -553,7 +550,6 @@ static int ais_ife_dev_probe(struct platform_device *pdev)
 	}
 
 	mutex_init(&p_ife_dev->mutex);
-	spin_lock_init(&p_ife_dev->eventq_lock);
 
 	/*
 	 *  for now, we only support one iommu handle. later
@@ -581,6 +577,9 @@ static int ais_ife_dev_probe(struct platform_device *pdev)
 		p_ife_dev->iommu_hdl_secure);
 
 	cam_smmu_set_client_page_fault_handler(p_ife_dev->iommu_hdl,
+			ais_ife_dev_iommu_fault_handler, p_ife_dev);
+
+	cam_smmu_set_client_page_fault_handler(p_ife_dev->iommu_hdl_secure,
 			ais_ife_dev_iommu_fault_handler, p_ife_dev);
 
 	hw_init.hw_idx = p_ife_dev->hw_idx;

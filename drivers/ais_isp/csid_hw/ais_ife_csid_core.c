@@ -570,29 +570,12 @@ static int ais_ife_csid_config_rdi_path(
 	path_cfg->end_line = res->in_cfg.crop_bottom;
 	path_cfg->decode_fmt = res->in_cfg.decode_format;
 	path_cfg->plain_fmt = res->in_cfg.pack_type;
+	path_cfg->init_frame_drop = res->in_cfg.init_frame_drop;
 
 	if (path_cfg->decode_fmt == 0xF)
 		path_cfg->pix_enable = false;
 	else
 		path_cfg->pix_enable = true;
-
-	/*
-	 * RDI path config and enable the time stamp capture
-	 * Enable the measurement blocks
-	 */
-	cfg0 = (path_cfg->vc << csid_reg->cmn_reg->vc_shift_val) |
-		(path_cfg->dt << csid_reg->cmn_reg->dt_shift_val) |
-		(path_cfg->cid << csid_reg->cmn_reg->dt_id_shift_val) |
-		(path_cfg->decode_fmt << csid_reg->cmn_reg->fmt_shift_val) |
-		(path_cfg->plain_fmt << csid_reg->cmn_reg->plain_fmt_shit_val) |
-		(path_cfg->crop_enable  <<
-			csid_reg->cmn_reg->crop_h_en_shift_val) |
-		(path_cfg->crop_enable  <<
-		csid_reg->cmn_reg->crop_v_en_shift_val) |
-		(1 << 2) | 3;
-
-	cam_io_w_mb(cfg0, soc_info->reg_map[0].mem_base +
-			csid_reg->rdi_reg[id]->csid_rdi_cfg0_addr);
 
 	/* select the post irq sub sample strobe for time stamp capture */
 	cam_io_w_mb(CSID_TIMESTAMP_STB_POST_IRQ, soc_info->reg_map[0].mem_base +
@@ -677,10 +660,17 @@ static int ais_ife_csid_config_rdi_path(
 			struct ais_ife_csid_path_cfg *tmp =
 				&csid_hw->rdi_cfg[i];
 
+			/*
+			 * doesn't compare with itself and
+			 * not INIT/STREAMING rdi
+			 */
+			if (id == i ||
+				tmp->state < AIS_ISP_RESOURCE_STATE_INIT_HW)
+				continue;
+
 			/*checking for multiple streams of same VC*/
-			if (i != id &&
-				tmp->vc	== path_cfg->vc &&
-				tmp->decode_fmt	== path_cfg->decode_fmt) {
+			if (tmp->vc == path_cfg->vc &&
+				tmp->decode_fmt == path_cfg->decode_fmt) {
 				val = path_cfg->decode_fmt <<
 					csid_reg->cmn_reg->fmt_shift_val;
 
@@ -693,8 +683,18 @@ static int ais_ife_csid_config_rdi_path(
 		}
 	}
 
-	/* Enable the path */
-	cfg0 |= (1 << csid_reg->cmn_reg->path_en_shift_val);
+	/* RDI path config and enable*/
+	cfg0 = (path_cfg->vc << csid_reg->cmn_reg->vc_shift_val) |
+		(path_cfg->dt << csid_reg->cmn_reg->dt_shift_val) |
+		(path_cfg->cid << csid_reg->cmn_reg->dt_id_shift_val) |
+		(path_cfg->decode_fmt << csid_reg->cmn_reg->fmt_shift_val) |
+		(path_cfg->plain_fmt << csid_reg->cmn_reg->plain_fmt_shit_val) |
+		(path_cfg->crop_enable  <<
+			csid_reg->cmn_reg->crop_h_en_shift_val) |
+		(path_cfg->crop_enable  <<
+		csid_reg->cmn_reg->crop_v_en_shift_val) |
+		(1 << csid_reg->cmn_reg->path_en_shift_val) |
+		(1 << 2) | 3;
 
 	cam_io_w_mb(cfg0, soc_info->reg_map[0].mem_base +
 		csid_reg->rdi_reg[id]->csid_rdi_cfg0_addr);
@@ -784,9 +784,12 @@ static int ais_ife_csid_deinit_rdi_path(
 			struct ais_ife_csid_path_cfg *tmp =
 				&csid_hw->rdi_cfg[i];
 
-			if (i != id &&
-				tmp->vc	== path_cfg->vc &&
-				tmp->decode_fmt	== path_cfg->decode_fmt)
+			if (i == id ||
+				tmp->state == AIS_ISP_RESOURCE_STATE_AVAILABLE)
+				continue;
+
+			if (tmp->vc == path_cfg->vc &&
+				tmp->decode_fmt == path_cfg->decode_fmt)
 				check_cnt++;
 		}
 
@@ -812,8 +815,6 @@ static int ais_ife_csid_enable_rdi_path(
 	csid_reg = csid_hw->csid_info->csid_reg;
 	soc_info = &csid_hw->hw_info->soc_info;
 	path_data = &csid_hw->rdi_cfg[id];
-
-	path_data->init_frame_drop = 1;
 	path_data->sof_cnt = 0;
 
 	/* Enable the required RDI interrupts */
@@ -1075,6 +1076,49 @@ static int ais_ife_csid_force_reset(void *hw_priv,
 	return rc;
 }
 
+static int ais_ife_csid_reset_retain_sw_reg(
+	struct ais_ife_csid_hw *csid_hw)
+{
+	int rc = 0;
+	uint32_t status;
+	const struct ais_ife_csid_reg_offset *csid_reg =
+		csid_hw->csid_info->csid_reg;
+	struct cam_hw_soc_info          *soc_info;
+
+	soc_info = &csid_hw->hw_info->soc_info;
+	/* clear the top interrupt first */
+	cam_io_w_mb(1, soc_info->reg_map[0].mem_base +
+		csid_reg->cmn_reg->csid_top_irq_clear_addr);
+	cam_io_w_mb(1, soc_info->reg_map[0].mem_base +
+		csid_reg->cmn_reg->csid_irq_cmd_addr);
+
+	usleep_range(3000, 3010);
+
+	cam_io_w_mb(csid_reg->cmn_reg->csid_rst_stb,
+		soc_info->reg_map[0].mem_base +
+		csid_reg->cmn_reg->csid_rst_strobes_addr);
+	rc = readl_poll_timeout(soc_info->reg_map[0].mem_base +
+		csid_reg->cmn_reg->csid_top_irq_status_addr,
+			status, (status & 0x1) == 0x1,
+		AIS_IFE_CSID_TIMEOUT_SLEEP_US, AIS_IFE_CSID_TIMEOUT_ALL_US);
+	if (rc < 0) {
+		CAM_ERR(CAM_ISP, "CSID:%d csid_reset fail rc = %d",
+			  csid_hw->hw_intf->hw_idx, rc);
+		rc = -ETIMEDOUT;
+	} else {
+		CAM_DBG(CAM_ISP, "CSID:%d hw reset completed %d",
+			csid_hw->hw_intf->hw_idx, rc);
+		rc = 0;
+	}
+	cam_io_w_mb(1, soc_info->reg_map[0].mem_base +
+		csid_reg->cmn_reg->csid_top_irq_clear_addr);
+	cam_io_w_mb(1, soc_info->reg_map[0].mem_base +
+		csid_reg->cmn_reg->csid_irq_cmd_addr);
+
+	return rc;
+}
+
+
 static int ais_ife_csid_reserve(void *hw_priv,
 	void *reserve_args, uint32_t arg_size)
 {
@@ -1083,6 +1127,7 @@ static int ais_ife_csid_reserve(void *hw_priv,
 	struct cam_hw_info                     *csid_hw_info;
 	struct ais_ife_rdi_init_args            *rdi_cfg;
 	const struct ais_ife_csid_reg_offset   *csid_reg;
+	unsigned long                           flags;
 
 	if (!hw_priv || !reserve_args ||
 		(arg_size != sizeof(struct ais_ife_rdi_init_args))) {
@@ -1119,6 +1164,19 @@ static int ais_ife_csid_reserve(void *hw_priv,
 	rc = ais_ife_csid_enable_csi2(csid_hw, &rdi_cfg->csi_cfg);
 	if (rc)
 		goto end;
+
+	if (csid_hw->device_enabled == 0) {
+		rc = ais_ife_csid_reset_retain_sw_reg(csid_hw);
+		if (rc < 0) {
+			CAM_ERR(CAM_ISP, "CSID: Failed in SW reset");
+			goto disable_csi2;
+		} else {
+			CAM_DBG(CAM_ISP, "CSID: SW reset Successful");
+			spin_lock_irqsave(&csid_hw->lock_state, flags);
+			csid_hw->device_enabled = 1;
+			spin_unlock_irqrestore(&csid_hw->lock_state, flags);
+		}
+	}
 
 	rc = ais_ife_csid_config_rdi_path(csid_hw, rdi_cfg);
 	if (rc)
@@ -1185,57 +1243,12 @@ end:
 	return rc;
 }
 
-
-static int ais_ife_csid_reset_retain_sw_reg(
-	struct ais_ife_csid_hw *csid_hw)
-{
-	int rc = 0;
-	uint32_t status;
-	const struct ais_ife_csid_reg_offset *csid_reg =
-		csid_hw->csid_info->csid_reg;
-	struct cam_hw_soc_info          *soc_info;
-
-	soc_info = &csid_hw->hw_info->soc_info;
-	/* clear the top interrupt first */
-	cam_io_w_mb(1, soc_info->reg_map[0].mem_base +
-		csid_reg->cmn_reg->csid_top_irq_clear_addr);
-	cam_io_w_mb(1, soc_info->reg_map[0].mem_base +
-		csid_reg->cmn_reg->csid_irq_cmd_addr);
-
-	usleep_range(3000, 3010);
-
-	cam_io_w_mb(csid_reg->cmn_reg->csid_rst_stb,
-		soc_info->reg_map[0].mem_base +
-		csid_reg->cmn_reg->csid_rst_strobes_addr);
-	rc = readl_poll_timeout(soc_info->reg_map[0].mem_base +
-		csid_reg->cmn_reg->csid_top_irq_status_addr,
-			status, (status & 0x1) == 0x1,
-		AIS_IFE_CSID_TIMEOUT_SLEEP_US, AIS_IFE_CSID_TIMEOUT_ALL_US);
-	if (rc < 0) {
-		CAM_ERR(CAM_ISP, "CSID:%d csid_reset fail rc = %d",
-			  csid_hw->hw_intf->hw_idx, rc);
-		rc = -ETIMEDOUT;
-	} else {
-		CAM_DBG(CAM_ISP, "CSID:%d hw reset completed %d",
-			csid_hw->hw_intf->hw_idx, rc);
-		rc = 0;
-	}
-	cam_io_w_mb(1, soc_info->reg_map[0].mem_base +
-		csid_reg->cmn_reg->csid_top_irq_clear_addr);
-	cam_io_w_mb(1, soc_info->reg_map[0].mem_base +
-		csid_reg->cmn_reg->csid_irq_cmd_addr);
-
-	return rc;
-}
-
-
 static int ais_ife_csid_init_hw(void *hw_priv,
 	void *init_args, uint32_t arg_size)
 {
 	int rc = 0;
 	struct ais_ife_csid_hw                 *csid_hw;
 	struct cam_hw_info                     *csid_hw_info;
-	unsigned long                           flags;
 
 	if (!hw_priv || !init_args ||
 		(arg_size != sizeof(struct ais_ife_rdi_init_args))) {
@@ -1250,16 +1263,6 @@ static int ais_ife_csid_init_hw(void *hw_priv,
 
 	/* Initialize the csid hardware */
 	rc = ais_ife_csid_enable_hw(csid_hw);
-
-	if (csid_hw->device_enabled == 0) {
-		rc = ais_ife_csid_reset_retain_sw_reg(csid_hw);
-		if (rc < 0)
-			CAM_ERR(CAM_ISP, "CSID: Failed in SW reset");
-	}
-
-	spin_lock_irqsave(&csid_hw->lock_state, flags);
-	csid_hw->device_enabled = 1;
-	spin_unlock_irqrestore(&csid_hw->lock_state, flags);
 
 	mutex_unlock(&csid_hw->hw_info->hw_mutex);
 
