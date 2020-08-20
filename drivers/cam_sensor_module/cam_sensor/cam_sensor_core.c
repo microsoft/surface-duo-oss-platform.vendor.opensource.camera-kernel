@@ -471,7 +471,7 @@ static void bridge_irq_work(struct work_struct *work)
 
 	/* Queue the event */
 	memset(&event, 0, sizeof(struct v4l2_event));
-	event.id = s_intr->gpio_array[0].gpio;
+	event.id = s_intr->gpio_idx;
 	event.type = AIS_SENSOR_EVENT_TYPE;
 	v4l2_event_queue(s_ctrl->v4l2_dev_str.sd.devnode, &event);
 
@@ -488,21 +488,19 @@ static irqreturn_t bridge_irq(int irq_num, void *dev)
 	return IRQ_HANDLED;
 }
 
-static int32_t cam_sensor_get_intr_gpio(int32_t* gpio_num, struct cam_sensor_ctrl_t *s_ctrl)
+static int32_t cam_sensor_get_intr_gpio(int32_t* gpio_num, struct cam_sensor_ctrl_t *s_ctrl, uint32_t idx)
 {
 	int32_t num = of_get_named_gpio(s_ctrl->soc_info.dev->of_node,
-		"sensor-intr-gpio", 0);
+		"sensor-intr-gpios", idx);
 
 	if (num < 0) {
 		CAM_ERR(CAM_SENSOR,
-				"sensor-intr-gpio not provided in device tree");
+				"sensor-intr-gpios not provided in device tree");
 		return -1;
 	}
 
-	if (gpio_num) {
-
+	if (gpio_num)
 		*gpio_num = num;
-	}
 
 	return 0;
 }
@@ -513,14 +511,15 @@ static int32_t cam_sensor_init_gpio_intr(
 {
 	int32_t rc = 0;
 	int32_t gpio_num = 0;
+	int32_t gpio_id = 0;
 	int32_t gpio_cfg0 = 0;
 	int32_t idx = 0;
 
 	for (idx = 0; idx < AIS_MAX_INTR_GPIO; idx++) {
 		if (!s_ctrl->s_intr[idx].work_inited &&
 			gpio_intr_info->gpio_num != -1) {
-			/* gpio_intr_info->gpio_num is the TLMM pin num */
-			gpio_num = gpio_intr_info->gpio_num;
+			/* gpio_intr_info->gpio_num is gpio idx */
+			gpio_id = gpio_intr_info->gpio_num;
 			gpio_cfg0 = gpio_intr_info->gpio_cfg0;
 
 			s_ctrl->s_intr[idx].sctrl = s_ctrl;
@@ -528,10 +527,11 @@ static int32_t cam_sensor_init_gpio_intr(
 			INIT_WORK(&s_ctrl->s_intr[idx].irq_work,
 				bridge_irq_work);
 
-			/* get the gpio num from devicetree, don't use the passed gpio_num from userspace */
-			rc = cam_sensor_get_intr_gpio(&gpio_num, s_ctrl);
+			/* get the gpio num from devicetree, don't use the passed gpio_num(TLMM pin) from userspace */
+			rc = cam_sensor_get_intr_gpio(&gpio_num, s_ctrl, gpio_id);
 			if (!rc) {
 				s_ctrl->s_intr[idx].gpio_array[0].gpio = gpio_num;
+				s_ctrl->s_intr[idx].gpio_idx = gpio_id;
 				rc = request_irq(gpio_to_irq(gpio_num),
 					bridge_irq,
 					IRQF_ONESHOT | gpio_cfg0,

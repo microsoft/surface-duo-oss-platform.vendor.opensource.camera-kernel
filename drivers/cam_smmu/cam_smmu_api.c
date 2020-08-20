@@ -3254,20 +3254,6 @@ static int cam_smmu_setup_cb(struct cam_context_bank_info *cb,
 		goto end;
 	}
 
-	if (cb->is_secure_pixel) {
-		int secure_vmid = VMID_CP_PIXEL;
-
-		rc = iommu_domain_set_attr(cb->domain,
-				DOMAIN_ATTR_SECURE_VMID, &secure_vmid);
-		if (rc) {
-			CAM_ERR(CAM_SMMU,
-				"programming secure vmid failed: %s %d",
-				dev_name(dev), rc);
-			rc = -ENODEV;
-			goto end;
-		}
-	}
-
 	return rc;
 end:
 	if (cb->shared_support) {

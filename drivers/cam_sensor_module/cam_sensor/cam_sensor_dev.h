@@ -73,6 +73,7 @@ struct intf_params {
 struct cam_sensor_intr_t {
 	struct cam_sensor_ctrl_t *sctrl;
 	struct gpio gpio_array[1];
+	int gpio_idx;
 	int work_inited;
 	struct work_struct irq_work;
 };
