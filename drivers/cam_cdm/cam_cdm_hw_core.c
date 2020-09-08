@@ -814,7 +814,7 @@ int cam_hw_cdm_init(void *hw_priv,
 		msecs_to_jiffies(CAM_CDM_HW_RESET_TIMEOUT));
 
 	if (time_left <= 0) {
-		CAM_ERR(CAM_CDM, "CDM HW reset Wait failed rc=%d", rc);
+		CAM_ERR(CAM_CDM, "CDM HW reset Wait failed rc=%d", time_left);
 		goto disable_return;
 	} else {
 		CAM_DBG(CAM_CDM, "CDM Init success");

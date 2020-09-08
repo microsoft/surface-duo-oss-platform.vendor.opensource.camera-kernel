@@ -254,7 +254,7 @@ int ais_vfe_enable_soc_resources(struct cam_hw_soc_info *soc_info)
 		goto disable_platform_resource;
 	}
 
-	if (!rc && soc_private->cpas_version == CAM_CPAS_TITAN_175_V120)
+	if (!rc && soc_private->cpas_version == CAM_CPAS_TITAN_175_V120) {
 		rc = cam_cpas_start(soc_private->cpas_handle[1], &ahb_vote,
 			&axi_vote);
 		if (rc) {
@@ -262,6 +262,7 @@ int ais_vfe_enable_soc_resources(struct cam_hw_soc_info *soc_info)
 			rc = -EFAULT;
 			goto disable_platform_resource;
 		}
+	}
 
 	goto end;
 
@@ -346,12 +347,13 @@ int ais_vfe_disable_soc_resources(struct cam_hw_soc_info *soc_info)
 		return rc;
 	}
 
-	if (!rc && soc_private->cpas_version == CAM_CPAS_TITAN_175_V120)
+	if (!rc && soc_private->cpas_version == CAM_CPAS_TITAN_175_V120) {
 		rc = cam_cpas_stop(soc_private->cpas_handle[1]);
 		if (rc) {
 			CAM_ERR(CAM_ISP, "Error! CPAS stop failed rc=%d", rc);
 			return rc;
 		}
+	}
 
 	return rc;
 }

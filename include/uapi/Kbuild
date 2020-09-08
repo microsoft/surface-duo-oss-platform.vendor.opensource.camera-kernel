@@ -32,5 +32,5 @@ header-y += media/msm_isp.h
 #header-y += camera/media/msmb_pproc.h
 
 # for compile temp add it
-#header-y += media/msm_media_info.h
+header-y += media/msm_media_info.h
 
