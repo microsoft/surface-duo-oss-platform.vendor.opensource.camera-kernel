@@ -43,6 +43,8 @@
 
 static struct cam_ope_hw_mgr *ope_hw_mgr;
 
+static int cam_ope_req_timer_reset(struct cam_ope_ctx *ctx_data);
+
 static int cam_ope_mgr_get_rsc_idx(struct cam_ope_ctx *ctx_data,
 	struct ope_io_buf_info *in_io_buf)
 {
@@ -124,6 +126,8 @@ static int cam_ope_mgr_process_cmd(void *priv, void *data)
 
 	if (task_data->req_id > ctx_data->last_flush_req)
 		ctx_data->last_flush_req = 0;
+
+	cam_ope_req_timer_reset(ctx_data);
 
 	rc = cam_cdm_submit_bls(ctx_data->ope_cdm.cdm_handle, cdm_cmd);
 
@@ -1083,8 +1087,7 @@ static int cam_ope_calc_total_clk(struct cam_ope_hw_mgr *hw_mgr,
 	hw_mgr_clk_info->base_clk = 0;
 	for (i = 0; i < OPE_CTX_MAX; i++) {
 		ctx_data = &hw_mgr->ctx[i];
-		if (ctx_data->ctx_state == OPE_CTX_STATE_ACQUIRED &&
-			ctx_data->ope_acquire.dev_type == dev_type)
+		if (ctx_data->ctx_state == OPE_CTX_STATE_ACQUIRED)
 			hw_mgr_clk_info->base_clk +=
 				ctx_data->clk_info.base_clk;
 	}
@@ -1333,7 +1336,7 @@ static int cam_ope_mgr_calculate_num_path(
 			((clk_info->axi_path[i].path_data_type -
 			CAM_AXI_PATH_DATA_OPE_START_OFFSET) >=
 			CAM_OPE_MAX_PER_PATH_VOTES)) {
-			CAM_WARN(CAM_OPE,
+			CAM_DBG(CAM_OPE,
 				"Invalid path %d, start offset=%d, max=%d",
 				ctx_data->clk_info.axi_path[i].path_data_type,
 				CAM_AXI_PATH_DATA_OPE_START_OFFSET,
@@ -1641,11 +1644,11 @@ static void cam_ope_ctx_cdm_callback(uint32_t handle, void *userdata,
 		if (!rc)
 			goto end;
 	} else {
-		CAM_ERR(CAM_OPE,
+		CAM_INFO(CAM_OPE,
 			"CDM hdl=%x, udata=%pK, status=%d, cookie=%d req_id = %llu ctx_id=%d",
 			 handle, userdata, status, cookie,
 			 ope_req->request_id, ctx->ctx_id);
-		CAM_ERR(CAM_OPE, "Rst of CDM and OPE for error reqid = %lld",
+		CAM_INFO(CAM_OPE, "Rst of CDM and OPE for error reqid = %lld",
 			ope_req->request_id);
 		if (status != CAM_CDM_CB_STATUS_HW_FLUSH) {
 			cam_ope_dump_req_data(ope_req);
@@ -2642,8 +2645,6 @@ static int cam_ope_mgr_acquire_hw(void *hw_priv, void *hw_acquire_args)
 
 		hw_mgr->clk_info.base_clk =
 			soc_info->clk_rate[CAM_TURBO_VOTE][idx];
-		hw_mgr->clk_info.curr_clk =
-			soc_info->clk_rate[CAM_TURBO_VOTE][idx];
 		hw_mgr->clk_info.threshold = 5;
 		hw_mgr->clk_info.over_clked = 0;
 
@@ -2674,6 +2675,8 @@ static int cam_ope_mgr_acquire_hw(void *hw_priv, void *hw_acquire_args)
 		soc_info = &dev->soc_info;
 		idx = soc_info->src_clk_idx;
 		clk_update.clk_rate = soc_info->clk_rate[CAM_TURBO_VOTE][idx];
+		hw_mgr->clk_info.curr_clk =
+			soc_info->clk_rate[CAM_TURBO_VOTE][idx];
 
 		rc = hw_mgr->ope_dev_intf[i]->hw_ops.process_cmd(
 			hw_mgr->ope_dev_intf[i]->hw_priv, OPE_HW_CLK_UPDATE,
@@ -3626,6 +3629,7 @@ static int cam_ope_mgr_hw_dump(void *hw_priv, void *hw_dump_args)
 	}
 
 	mutex_lock(&hw_mgr->hw_mgr_mutex);
+	mutex_lock(&ctx_data->ctx_mutex);
 
 	CAM_INFO(CAM_OPE, "Req %lld", dump_args->request_id);
 	for (idx = 0; idx < CAM_CTX_REQ_MAX; idx++) {
@@ -3639,6 +3643,7 @@ static int cam_ope_mgr_hw_dump(void *hw_priv, void *hw_dump_args)
 
 	/* no matching request found */
 	if (idx == CAM_CTX_REQ_MAX) {
+		mutex_unlock(&ctx_data->ctx_mutex);
 		mutex_unlock(&hw_mgr->hw_mgr_mutex);
 		return 0;
 	}
@@ -3656,6 +3661,7 @@ static int cam_ope_mgr_hw_dump(void *hw_priv, void *hw_dump_args)
 			req_ts.tv_nsec/NSEC_PER_USEC,
 			cur_ts.tv_sec,
 			cur_ts.tv_nsec/NSEC_PER_USEC);
+		mutex_unlock(&ctx_data->ctx_mutex);
 		mutex_unlock(&hw_mgr->hw_mgr_mutex);
 		return 0;
 	}
@@ -3667,6 +3673,7 @@ static int cam_ope_mgr_hw_dump(void *hw_priv, void *hw_dump_args)
 		cur_ts.tv_sec,
 		cur_ts.tv_nsec/NSEC_PER_USEC);
 
+	mutex_unlock(&ctx_data->ctx_mutex);
 	mutex_unlock(&hw_mgr->hw_mgr_mutex);
 	return 0;
 }
