@@ -152,7 +152,8 @@ static int cam_vfe_camif_ver3_err_irq_top_half(
 	return rc;
 }
 
-static int cam_vfe_camif_ver3_validate_pix_pattern(uint32_t pattern)
+static int cam_vfe_camif_ver3_validate_pix_pattern(uint32_t pattern,
+	uint32_t *input_pp_fmt)
 {
 	int rc;
 
@@ -161,11 +162,15 @@ static int cam_vfe_camif_ver3_validate_pix_pattern(uint32_t pattern)
 	case CAM_ISP_PATTERN_BAYER_GRGRGR:
 	case CAM_ISP_PATTERN_BAYER_BGBGBG:
 	case CAM_ISP_PATTERN_BAYER_GBGBGB:
+		rc = 0;
+		*input_pp_fmt = CAM_ISP_PP_INPUT_BAYER_FMT;
+		break;
 	case CAM_ISP_PATTERN_YUV_YCBYCR:
 	case CAM_ISP_PATTERN_YUV_YCRYCB:
 	case CAM_ISP_PATTERN_YUV_CBYCRY:
 	case CAM_ISP_PATTERN_YUV_CRYCBY:
 		rc = 0;
+		*input_pp_fmt = CAM_ISP_PP_INPUT_YUV_FMT;
 		break;
 	default:
 		CAM_ERR(CAM_ISP, "Error, Invalid pix pattern:%d", pattern);
@@ -239,7 +244,8 @@ int cam_vfe_camif_ver3_acquire_resource(
 	acquire_data = (struct cam_vfe_acquire_args *)acquire_param;
 
 	rc = cam_vfe_camif_ver3_validate_pix_pattern(
-		acquire_data->vfe_in.in_port->test_pattern);
+		acquire_data->vfe_in.in_port->test_pattern,
+		&camif_data->cam_common_cfg.input_pp_fmt);
 
 	if (rc) {
 		CAM_ERR(CAM_ISP, "Validate pix pattern failed, rc = %d", rc);

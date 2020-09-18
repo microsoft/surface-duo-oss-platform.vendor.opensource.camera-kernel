@@ -294,7 +294,25 @@ static int32_t cam_sensor_i2c_modes_util(
 				rc);
 			return rc;
 		}
-	} else if (i2c_list->op_code == CAM_SENSOR_I2C_WRITE_SEQ) {
+
+		size = i2c_list->i2c_settings.size;
+		for (i = 0; i < size; i++) {
+			uint32_t readout;
+			rc = camera_io_dev_read(
+			io_master_info,
+			i2c_list->i2c_settings.reg_setting[i].reg_addr,
+			&readout,
+			i2c_list->i2c_settings.addr_type,
+			i2c_list->i2c_settings.data_type);
+			if (rc == 0)
+				CAM_DBG(CAM_SENSOR,
+				"i2c read apply setting :slave_add:0x%x, reg_add 0x%x reg_data 0x%x \n",
+				io_master_info->cci_client->sid<<1,
+				i2c_list->i2c_settings.reg_setting[i].reg_addr,
+				readout);
+		}
+	}
+	else if (i2c_list->op_code == CAM_SENSOR_I2C_WRITE_SEQ) {
 		rc = camera_io_dev_write_continuous(
 			io_master_info,
 			&(i2c_list->i2c_settings),
