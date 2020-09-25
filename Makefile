@@ -37,11 +37,11 @@ LINUXINCLUDE    += \
 		-include $(srctree)/techpack/camera/config/lahainacameraconf.h
 endif
 
-ifeq ($(CONFIG_ARCH_SM8150), y)
+ifeq ($(CONFIG_ARCH_SA8155), y)
 include $(srctree)/techpack/ais/config/hanacamera.conf
 endif
 
-ifeq ($(CONFIG_ARCH_SM8150), y)
+ifeq ($(CONFIG_ARCH_SA8155), y)
 LINUXINCLUDE += \
 		-include $(srctree)/techpack/ais/config/hanacameraconf.h
 endif
