@@ -103,8 +103,6 @@ struct cam_context_bank_info {
 	const char *name;
 	/* stage 2 only */
 	bool is_secure;
-	/* stage 1 */
-	bool is_secure_pixel;
 	uint8_t scratch_buf_support;
 	uint8_t firmware_support;
 	uint8_t shared_support;
@@ -3329,10 +3327,6 @@ static int cam_smmu_get_memory_regions_info(struct device_node *of_node,
 
 	mem_map_node = of_get_child_by_name(of_node, "iova-mem-map");
 	cb->is_secure = of_property_read_bool(of_node, "qcom,secure-cb");
-
-	if (!cb->is_secure)
-		cb->is_secure_pixel = of_property_read_bool(of_node,
-			"qcom,secure-pixel-cb");
 
 	/*
 	 * We always expect a memory map node, except when it is a secure

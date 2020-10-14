@@ -565,7 +565,7 @@ static int ais_ife_dev_probe(struct platform_device *pdev)
 		goto unregister;
 	}
 
-	rc = cam_smmu_get_handle("cam-secure",
+	rc = cam_smmu_get_handle("ife-cp",
 		&p_ife_dev->iommu_hdl_secure);
 	if (rc) {
 		CAM_ERR(CAM_ISP, "Failed to get secure iommu handle %d", rc);
