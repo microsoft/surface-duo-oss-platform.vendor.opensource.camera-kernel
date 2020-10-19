@@ -265,9 +265,12 @@ int cam_vfe_camif_ver3_acquire_resource(
 	camif_data->event_cb    = acquire_data->event_cb;
 	camif_data->priv        = acquire_data->priv;
 
-	CAM_DBG(CAM_ISP, "VFE:%d CAMIF pix_pattern:%d dsp_mode=%d",
+	CAM_DBG(CAM_ISP,
+		"VFE:%d CAMIF pix_pattern:%d dsp_mode=%d format=%d",
 		camif_res->hw_intf->hw_idx,
-		camif_data->pix_pattern, camif_data->dsp_mode);
+		camif_data->pix_pattern, camif_data->dsp_mode,
+		acquire_data->vfe_in.in_port->format);
+
 
 	return rc;
 }
@@ -425,6 +428,11 @@ static int cam_vfe_camif_ver3_resource_start(
 	val |= (rsrc_data->cam_common_cfg.input_mux_sel_pp & 0x3) <<
 		CAM_SHIFT_TOP_CORE_CFG_INPUTMUX_PP;
 
+	val |= (rsrc_data->cam_common_cfg.input_pp_fmt & 0x3) <<
+		CAM_SHIFT_TOP_CORE_CFG_INPUT_PP_FMT;
+
+	CAM_DBG(CAM_ISP, "VFE:%d TOP core_cfg: 0x%X", camif_res->hw_intf->hw_idx, val);
+
 	cam_io_w_mb(val, rsrc_data->mem_base +
 		rsrc_data->common_reg->core_cfg_0);
 
@@ -571,6 +579,24 @@ static int cam_vfe_camif_ver3_reg_dump(
 		if (offset == 0x1C || offset == 0x34 ||
 			offset == 0x38 || offset == 0x90)
 			continue;
+		val = cam_soc_util_r(camif_priv->soc_info, 0, offset);
+		CAM_INFO(CAM_ISP, "offset 0x%X value 0x%X", offset, val);
+	}
+
+	CAM_INFO(CAM_ISP, "IFE:%d Chroma", camif_res->hw_intf->hw_idx);
+	for (offset = 0x2a00; offset <= 0x2a74; offset += 0x4) {
+		if (offset == 0x2a08)
+			offset = 0x2a60;
+
+		val = cam_soc_util_r(camif_priv->soc_info, 0, offset);
+		CAM_INFO(CAM_ISP, "offset 0x%X value 0x%X", offset, val);
+	}
+
+	CAM_INFO(CAM_ISP, "IFE:%d demux", camif_res->hw_intf->hw_idx);
+	for (offset = 0x2800; offset <= 0x286c; offset += 0x4) {
+		if (offset == 0x2808)
+			offset = 0x2860;
+
 		val = cam_soc_util_r(camif_priv->soc_info, 0, offset);
 		CAM_INFO(CAM_ISP, "offset 0x%X value 0x%X", offset, val);
 	}
