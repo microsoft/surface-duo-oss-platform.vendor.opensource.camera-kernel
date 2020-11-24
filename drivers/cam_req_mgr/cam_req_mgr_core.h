@@ -41,6 +41,8 @@
 #define VERSION_2  2
 #define CAM_REQ_MGR_MAX_TRIGGERS   2
 
+#define MAX_SOF_TRIGGER_CNT_IN_WORKQ	1
+
 /**
  * enum crm_workq_task_type
  * @codes: to identify which type of task is present
@@ -323,6 +325,7 @@ struct cam_req_mgr_connected_device {
  * @state                : link state machine
  * @parent               : pvt data - link's parent is session
  * @lock                 : mutex lock to guard link data operations
+ * @trigger_spin_lock    : spin lock to protect sof_trigger_cnt
  * @link_state_spin_lock : spin lock to protect link state variable
  * @subscribe_event      : irqs that link subscribes, IFE should send
  *                         notification to CRM at those hw events.
@@ -354,6 +357,8 @@ struct cam_req_mgr_connected_device {
  * @skip_wd_validation   : skip initial frames crm_wd_timer validation in the
  *                         case of long exposure use case
  * @last_applied_jiffies : Record the jiffies of last applied req
+ * @sof_trigger_cnt      : Counter to keep track of SOF trigger requests that
+ *                         are submitted to the work queue.
  */
 struct cam_req_mgr_core_link {
 	int32_t                              link_hdl;
@@ -368,6 +373,7 @@ struct cam_req_mgr_core_link {
 	enum cam_req_mgr_link_state          state;
 	void                                *parent;
 	struct mutex                         lock;
+	spinlock_t                           trigger_spin_lock;
 	spinlock_t                           link_state_spin_lock;
 	uint32_t                             subscribe_event;
 	uint32_t                             trigger_mask;
@@ -388,6 +394,7 @@ struct cam_req_mgr_core_link {
 	uint32_t    trigger_cnt[CAM_REQ_MGR_MAX_TRIGGERS];
 	bool                                 skip_wd_validation;
 	uint64_t                             last_applied_jiffies;
+	int32_t                              sof_trigger_cnt;
 };
 
 /**

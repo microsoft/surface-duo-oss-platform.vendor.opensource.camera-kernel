@@ -51,6 +51,7 @@ void cam_req_mgr_core_link_reset(struct cam_req_mgr_core_link *link)
 	link->prev_sof_timestamp = 0;
 	link->skip_wd_validation = false;
 	link->last_applied_jiffies = 0;
+	link->sof_trigger_cnt = 0;
 }
 
 void cam_req_mgr_handle_core_shutdown(void)
@@ -2001,6 +2002,7 @@ static struct cam_req_mgr_core_link *__cam_req_mgr_reserve_link(
 	link->state = CAM_CRM_LINK_STATE_IDLE;
 	link->parent = (void *)session;
 	link->sync_link = NULL;
+	link->sof_trigger_cnt = 0;
 	mutex_unlock(&link->lock);
 
 	mutex_lock(&session->lock);
@@ -2652,6 +2654,13 @@ static int cam_req_mgr_process_trigger(void *priv, void *data)
 
 release_lock:
 	mutex_unlock(&link->req.lock);
+	if (trigger_data != NULL &&
+		trigger_data->trigger == CAM_TRIGGER_POINT_SOF) {
+		spin_lock_bh(&link->trigger_spin_lock);
+		if (link != NULL && link->sof_trigger_cnt > 0)
+			link->sof_trigger_cnt--;
+		spin_unlock_bh(&link->trigger_spin_lock);
+	}
 end:
 	return rc;
 }
@@ -3022,12 +3031,37 @@ static int cam_req_mgr_cb_notify_trigger(
 	crm_timer_reset(link->watchdog);
 	spin_unlock_bh(&link->link_state_spin_lock);
 
+	/*
+	 * WA: FIXME
+	 * If some tasks triggered by SOF in link->workq have not
+	 * be finished yet, we will not add new task into work queue.
+	 * Because if add new task, the schedule of this task will be
+	 * delayed and this scheduling time point is uncertain, this
+	 * maybe cause some timing issue between apply_req and ISP
+	 * IRQ handle.
+	 * now set MAX_SOF_TRIGGER_CNT_IN_WORKQ to be 1.
+	 */
+	if (trigger_data->trigger == CAM_TRIGGER_POINT_SOF) {
+		spin_lock_bh(&link->trigger_spin_lock);
+		if (link->sof_trigger_cnt >= MAX_SOF_TRIGGER_CNT_IN_WORKQ) {
+			CAM_WARN(CAM_CRM,
+				"trigger cnt:%d over more than %d, Skip it",
+				link->sof_trigger_cnt,
+				MAX_SOF_TRIGGER_CNT_IN_WORKQ);
+			spin_unlock_bh(&link->trigger_spin_lock);
+			rc = 0;
+			goto end;
+		}
+		link->sof_trigger_cnt++;
+		spin_unlock_bh(&link->trigger_spin_lock);
+	}
+
 	task = cam_req_mgr_workq_get_task(link->workq);
 	if (!task) {
 		CAM_ERR(CAM_CRM, "no empty task frame %lld",
 			trigger_data->frame_id);
 		rc = -EBUSY;
-		goto end;
+		goto trigger_free;
 	}
 	task_data = (struct crm_task_payload *)task->payload;
 	task_data->type = CRM_WORKQ_TASK_NOTIFY_SOF;
@@ -3041,7 +3075,25 @@ static int cam_req_mgr_cb_notify_trigger(
 	task->process_cb = &cam_req_mgr_process_trigger;
 	rc = cam_req_mgr_workq_enqueue_task(task, link, CRM_TASK_PRIORITY_0);
 
+	/*
+	 * If task isn't enqueued into workq really,
+	 * sof_trigger_cnt don't need to be increased.
+	 */
+	if (task->cancel == 1 || rc < 0) {
+		CAM_ERR(CAM_CRM,
+			"Fail to enqueue task into workq, rc=%d", rc);
+		goto trigger_free;
+	}
+
 end:
+	return rc;
+trigger_free:
+	if (trigger_data->trigger == CAM_TRIGGER_POINT_SOF) {
+		spin_lock_bh(&link->trigger_spin_lock);
+		if (link->sof_trigger_cnt > 0)
+			link->sof_trigger_cnt--;
+		spin_unlock_bh(&link->trigger_spin_lock);
+	}
 	return rc;
 }
 
@@ -4106,6 +4158,7 @@ int cam_req_mgr_core_device_init(void)
 	for (i = 0; i < MAXIMUM_LINKS_PER_SESSION; i++) {
 		mutex_init(&g_links[i].lock);
 		spin_lock_init(&g_links[i].link_state_spin_lock);
+		spin_lock_init(&g_links[i].trigger_spin_lock);
 		atomic_set(&g_links[i].is_used, 0);
 		cam_req_mgr_core_link_reset(&g_links[i]);
 	}
