@@ -381,7 +381,7 @@ static int32_t cam_sensor_i2c_modes_util(
 				rc);
 			return rc;
 		}
-
+/*
 		size = i2c_list->i2c_settings.size;
 		for (i = 0; i < size; i++) {
 			uint32_t readout;
@@ -397,7 +397,7 @@ static int32_t cam_sensor_i2c_modes_util(
 				io_master_info->cci_client->sid<<1,
 				i2c_list->i2c_settings.reg_setting[i].reg_addr,
 				readout);
-		}
+		}*/
 	}
 	else if (i2c_list->op_code == CAM_SENSOR_I2C_WRITE_SEQ) {
 		rc = camera_io_dev_write_continuous(
