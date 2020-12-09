@@ -1362,8 +1362,12 @@ static struct cam_vfe_bus_rd_ver1_hw_info vfe480_bus_rd_hw_info = {
 	.vfe_bus_rd_hw_info = {
 		{
 			.vfe_bus_rd_type = CAM_VFE_BUS_RD_VER1_VFE_BUSRD_RDI0,
-			.max_width     = -1,
-			.max_height    = -1,
+			.max_width         = -1,
+			.max_height        = -1,
+			.max_clk_threshold = 720000000,
+			.nom_clk_threshold = 560000000,
+			.min_clk_threshold = 360000000,
+			.bytes_per_clk     = 2,
 		},
 	},
 	.top_irq_shift = 8,
