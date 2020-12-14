@@ -532,6 +532,11 @@ static int cam_vfe_bus_deinit_rm_resource(
 static int cam_vfe_bus_rd_get_secure_mode(void *priv, void *cmd_args,
 	uint32_t arg_size)
 {
+
+	bool *mode = cmd_args;
+
+	*mode = false;
+
 	return 0;
 }
 
