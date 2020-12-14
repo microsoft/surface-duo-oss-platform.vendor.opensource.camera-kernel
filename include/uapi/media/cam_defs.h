@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
 /*
- * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
  */
 
 #ifndef __UAPI_CAM_DEFS_H__
@@ -57,7 +57,7 @@
 #define CAM_UBWC_CFG_VERSION_1              1
 #define CAM_UBWC_CFG_VERSION_2              2
 
-#define CAM_MAX_ACQ_RES    5
+#define CAM_MAX_ACQ_RES    8
 #define CAM_MAX_HW_SPLIT   3
 
 
