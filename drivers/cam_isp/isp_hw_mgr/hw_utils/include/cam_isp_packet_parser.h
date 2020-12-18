@@ -195,4 +195,5 @@ int cam_isp_add_go_cmd(
 	struct cam_kmd_buf_info              *kmd_buf_info);
 
 
+int cam_isp_count_hw_entries(struct cam_hw_prepare_update_args *prepare);
 #endif /*_CAM_ISP_HW_PARSER_H */

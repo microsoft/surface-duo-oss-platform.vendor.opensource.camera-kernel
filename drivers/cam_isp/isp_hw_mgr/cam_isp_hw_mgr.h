@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2017-2019, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _CAM_ISP_HW_MGR_H_
@@ -61,7 +61,7 @@ struct cam_isp_hw_mgr {
 struct cam_hw_event_recovery_data {
 	uint32_t                   error_type;
 	uint32_t                   affected_core[CAM_ISP_HW_NUM_MAX];
-	struct cam_ife_hw_mgr_ctx *affected_ctx[CAM_CTX_MAX];
+	struct cam_ife_hw_concrete_ctx *affected_ctx[CAM_CTX_MAX];
 	uint32_t                   no_of_context;
 };
 #endif /* _CAM_ISP_HW_MGR_H_ */
