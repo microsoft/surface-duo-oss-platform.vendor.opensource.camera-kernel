@@ -378,6 +378,13 @@ subscribe_err:
 		}
 	}
 
+	cam_io_w_mb(0x6000001, rsrc_data->mem_base +
+		rsrc_data->camif_lite_reg->lite_module_config);
+	cam_io_w_mb(0x0, rsrc_data->mem_base +
+		rsrc_data->camif_lite_reg->lite_skip_period);
+	cam_io_w_mb(0xFFFFFFFF, rsrc_data->mem_base +
+		rsrc_data->camif_lite_reg->lite_irq_subsample_pattern);
+
 	CAM_DBG(CAM_ISP, "VFE:%d CAMIF LITE:%d Start Done",
 		camif_lite_res->hw_intf->hw_idx,
 		camif_lite_res->res_id);

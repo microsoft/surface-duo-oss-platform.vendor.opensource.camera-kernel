@@ -46,6 +46,7 @@ enum cam_ife_hw_mgr_res_type {
  * @children:            point to the children resource nodes
  * @child_num:           numbe of the child resource node.
  * @is_secure            informs whether the resource is in secure mode or not
+ * @plane_type:          Indicate plane type for YUV sensor which needs to do format conversion
  *
  */
 struct cam_ife_hw_mgr_res {
@@ -60,6 +61,7 @@ struct cam_ife_hw_mgr_res {
 	struct cam_ife_hw_mgr_res       *child[CAM_IFE_HW_OUT_RES_MAX];
 	uint32_t                         num_children;
 	uint32_t                         is_secure;
+	enum cam_ife_hw_plane_type       plane_type;
 };
 
 

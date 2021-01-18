@@ -166,6 +166,7 @@ struct cam_vfe_bus_ver3_vfe_out_data {
 	struct cam_cdm_utils_ops        *cdm_util_ops;
 	uint32_t                         secure_mode;
 	void                            *priv;
+	enum cam_ife_hw_plane_type       plane_type;
 };
 
 struct cam_vfe_bus_ver3_priv {
@@ -419,6 +420,8 @@ static int cam_vfe_bus_ver3_get_num_wm(
 		case CAM_FORMAT_PLAIN32_20:
 		case CAM_FORMAT_PLAIN128:
 		case CAM_FORMAT_YUV422:
+		case CAM_FORMAT_NV12:
+		case CAM_FORMAT_NV21:
 			return 1;
 		default:
 			break;
@@ -1163,6 +1166,13 @@ static int cam_vfe_bus_ver3_acquire_wm(
 			rsrc_data->width =
 				ALIGNUP(rsrc_data->width * 8, 16) / 16;
 			rsrc_data->en_cfg = 0x1;
+			break;
+		case CAM_FORMAT_NV12:
+		case CAM_FORMAT_NV21:
+			rsrc_data->width = CAM_VFE_RDI_BUS_DEFAULT_WIDTH;
+			rsrc_data->height = 0;
+			rsrc_data->stride = CAM_VFE_RDI_BUS_DEFAULT_STRIDE;
+			rsrc_data->en_cfg = (0x1 << 16) | 0x1;
 			break;
 		default:
 			CAM_ERR(CAM_ISP, "Unsupported RDI format %d",
@@ -1915,6 +1925,10 @@ static int cam_vfe_bus_ver3_acquire_vfe_out(void *bus_priv, void *acquire_args,
 	if (num_wm < 1)
 		return -EINVAL;
 
+	CAM_DBG(CAM_ISP, "VFE:%d out_type:0x%X num_wm:%d",
+		ver3_bus_priv->common_data.core_index,
+		out_acquire_args->out_port_info->res_type, num_wm);
+
 	rsrc_node = &ver3_bus_priv->vfe_out[vfe_out_res_id];
 	if (rsrc_node->res_state != CAM_ISP_RESOURCE_STATE_AVAILABLE) {
 		CAM_ERR(CAM_ISP,
@@ -1962,6 +1976,11 @@ static int cam_vfe_bus_ver3_acquire_vfe_out(void *bus_priv, void *acquire_args,
 	rsrc_node->tasklet_info = acq_args->tasklet;
 	rsrc_node->cdm_ops = out_acquire_args->cdm_ops;
 	rsrc_data->cdm_util_ops = out_acquire_args->cdm_ops;
+	rsrc_data->plane_type = out_acquire_args->plane_type;
+
+	CAM_DBG(CAM_ISP, "VFE:%d out_type:0x%X acquire wm",
+		ver3_bus_priv->common_data.core_index,
+		out_acquire_args->out_port_info->res_type);
 
 	/* Acquire WM and retrieve COMP GRP ID */
 	for (i = 0; i < num_wm; i++) {
@@ -1982,6 +2001,10 @@ static int cam_vfe_bus_ver3_acquire_vfe_out(void *bus_priv, void *acquire_args,
 			goto release_wm;
 		}
 	}
+
+	CAM_DBG(CAM_ISP, "VFE:%d out_type:0x%X acquire comp grp",
+		ver3_bus_priv->common_data.core_index,
+		out_acquire_args->out_port_info->res_type);
 
 	/* Acquire composite group using COMP GRP ID */
 	rc = cam_vfe_bus_ver3_acquire_comp_grp(ver3_bus_priv,
@@ -3120,6 +3143,10 @@ static int cam_vfe_bus_ver3_update_wm(void *priv, void *cmd_args,
 			loop_size = wm_data->irq_subsample_period + 1;
 		else
 			loop_size = 1;
+
+		CAM_DBG(CAM_ISP, "WM:%d en_ubwc:%d loop_size:%d image_addr:%x",
+			wm_data->index, wm_data->en_ubwc, loop_size,
+			wm_data->hw_regs->image_addr);
 
 		/* WM Image address */
 		for (k = 0; k < loop_size; k++) {

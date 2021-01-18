@@ -10,15 +10,21 @@
 static int cam_ife_csid_get_dt_properties(struct cam_hw_soc_info *soc_info)
 {
 	struct device_node *of_node = NULL;
-	struct csid_device_soc_info *csid_soc_info = NULL;
+	struct cam_csid_soc_private *soc_private = NULL;
 	int rc = 0;
 
 	of_node = soc_info->pdev->dev.of_node;
-	csid_soc_info = (struct csid_device_soc_info *)soc_info->soc_private;
 
 	rc = cam_soc_util_get_dt_properties(soc_info);
 	if (rc)
 		return rc;
+
+	soc_private = (struct cam_csid_soc_private *)soc_info->soc_private;
+	soc_private->is_ife_csid_lite = false;
+	if (strnstr(soc_info->compatible, "lite",
+		strlen(soc_info->compatible)) != NULL) {
+		soc_private->is_ife_csid_lite = true;
+	}
 
 	return rc;
 }

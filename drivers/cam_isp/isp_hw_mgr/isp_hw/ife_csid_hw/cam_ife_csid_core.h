@@ -490,6 +490,7 @@ struct cam_ife_csid_cid_data {
  *                  Slave will synchronize with master Start and stop operations
  * @clk_rate        Clock rate
  * @num_bytes_out:  Number of output bytes per cycle
+ * @plane_type:     Indicate plane type for YUV sensor which needs to do format conversion
  *
  */
 struct cam_ife_csid_path_cfg {
@@ -515,6 +516,7 @@ struct cam_ife_csid_path_cfg {
 	uint32_t                        horizontal_bin;
 	uint32_t                        qcfa_bin;
 	uint32_t                        num_bytes_out;
+	enum cam_ife_hw_plane_type      plane_type;
 };
 
 /**

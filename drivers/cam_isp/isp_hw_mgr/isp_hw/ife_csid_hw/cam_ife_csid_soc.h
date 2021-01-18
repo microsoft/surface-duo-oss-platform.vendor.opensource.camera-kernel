@@ -16,9 +16,11 @@
  * @cpas_handle:             Handle returned on registering with CPAS driver.
  *                           This handle is used for all further interface
  *                           with CPAS.
+ * @is_ife_csid_lite:        Flag to indicate Whether a full csid or a Lite csid
  */
 struct cam_csid_soc_private {
 	uint32_t cpas_handle;
+	bool     is_ife_csid_lite;
 };
 
 /**
