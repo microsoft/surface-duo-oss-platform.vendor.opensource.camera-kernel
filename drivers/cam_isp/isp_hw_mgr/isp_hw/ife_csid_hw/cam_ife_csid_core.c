@@ -679,6 +679,7 @@ int cam_ife_csid_cid_reserve(struct cam_ife_csid_hw *csid_hw,
 	struct cam_ife_csid_cid_data       *cid_data;
 	uint32_t camera_hw_version;
 	uint32_t valid_vc_dt;
+	struct cam_csid_soc_private     *soc_priv;
 
 	CAM_DBG(CAM_ISP,
 		"CSID:%d res_sel:0x%x Lane type:%d lane_num:%d dt:%d vc:%d",
@@ -688,6 +689,9 @@ int cam_ife_csid_cid_reserve(struct cam_ife_csid_hw *csid_hw,
 		cid_reserv->in_port->lane_num,
 		cid_reserv->in_port->dt[0],
 		cid_reserv->in_port->vc[0]);
+
+	soc_priv = (struct cam_csid_soc_private *)
+		(csid_hw->hw_info->soc_info.soc_private);
 
 	if (cid_reserv->in_port->res_type >= CAM_ISP_IFE_IN_RES_MAX) {
 		CAM_ERR(CAM_ISP, "CSID:%d  Invalid phy sel %d",
@@ -858,12 +862,26 @@ int cam_ife_csid_cid_reserve(struct cam_ife_csid_hw *csid_hw,
 	case CAM_IFE_PIX_PATH_RES_RDI_1:
 	case CAM_IFE_PIX_PATH_RES_RDI_2:
 	case CAM_IFE_PIX_PATH_RES_RDI_3:
+		/* Override the res id if we need cds module */
+		CAM_DBG(CAM_ISP,
+			"plane_type:%d", cid_reserv->plane_type);
+		if (cid_reserv->plane_type == CAM_IFE_HW_PLANE_UV) {
+			if (soc_priv->is_ife_csid_lite)
+				cid_reserv->res_id = CAM_IFE_PIX_PATH_RES_RDI_3;
+			else
+				cid_reserv->res_id = CAM_IFE_PIX_PATH_RES_RDI_2;
+		}
+
 		if (csid_hw->rdi_res[cid_reserv->res_id].res_state !=
 			CAM_ISP_RESOURCE_STATE_AVAILABLE) {
 			CAM_ERR(CAM_ISP,
-				"CSID:%d RDI:%d resource not available",
+				"CSID:%d RDI:%d resource not available %d %d %d %d",
 				csid_hw->hw_intf->hw_idx,
-				cid_reserv->res_id);
+				cid_reserv->res_id,
+				csid_hw->rdi_res[0].res_state,
+				csid_hw->rdi_res[1].res_state,
+				csid_hw->rdi_res[2].res_state,
+				csid_hw->rdi_res[3].res_state);
 			rc = -EINVAL;
 			goto end;
 		}
@@ -975,6 +993,10 @@ int cam_ife_csid_path_reserve(struct cam_ife_csid_hw *csid_hw,
 	struct cam_ife_csid_path_cfg    *path_data;
 	struct cam_isp_resource_node    *res;
 	bool                             is_rdi = false;
+	struct cam_csid_soc_private     *soc_priv;
+
+	soc_priv = (struct cam_csid_soc_private *)
+		(csid_hw->hw_info->soc_info.soc_private);
 
 	/* CSID  CSI2 v2.0 supports 31 vc */
 	if (reserve->sync_mode >= CAM_ISP_HW_SYNC_MAX) {
@@ -1055,6 +1077,14 @@ int cam_ife_csid_path_reserve(struct cam_ife_csid_hw *csid_hw,
 	case CAM_IFE_PIX_PATH_RES_RDI_1:
 	case CAM_IFE_PIX_PATH_RES_RDI_2:
 	case CAM_IFE_PIX_PATH_RES_RDI_3:
+		/* Override the res id if we need cds module */
+		if (reserve->plane_type == CAM_IFE_HW_PLANE_UV) {
+			if (soc_priv->is_ife_csid_lite)
+				reserve->res_id = CAM_IFE_PIX_PATH_RES_RDI_3;
+			else
+				reserve->res_id = CAM_IFE_PIX_PATH_RES_RDI_2;
+		}
+
 		if (csid_hw->rdi_res[reserve->res_id].res_state !=
 			CAM_ISP_RESOURCE_STATE_AVAILABLE) {
 			CAM_ERR(CAM_ISP,
@@ -1118,6 +1148,7 @@ int cam_ife_csid_path_reserve(struct cam_ife_csid_hw *csid_hw,
 	path_data->horizontal_bin = reserve->in_port->horizontal_bin;
 	path_data->qcfa_bin = reserve->in_port->qcfa_bin;
 	path_data->num_bytes_out = reserve->in_port->num_bytes_out;
+	path_data->plane_type = reserve->plane_type;
 
 	CAM_DBG(CAM_ISP,
 		"Res id: %d height:%d line_start %d line_stop %d crop_en %d",
@@ -2274,14 +2305,21 @@ static int cam_ife_csid_init_config_rdi_path(
 	cam_io_w_mb(0, soc_info->reg_map[0].mem_base +
 		csid_reg->rdi_reg[id]->csid_rdi_irq_subsample_pattern_addr);
 
-	/* set pixel drop pattern to 0 and period to 1 */
-	cam_io_w_mb(0, soc_info->reg_map[0].mem_base +
+	val = 0;
+	if (path_data->drop_enable) {
+		if (path_data->plane_type == CAM_IFE_HW_PLANE_Y)
+			val = 0x5555;
+		else if (path_data->plane_type == CAM_IFE_HW_PLANE_UV)
+			val = 0xAAAA;
+	}
+
+	cam_io_w_mb(val, soc_info->reg_map[0].mem_base +
 		csid_reg->rdi_reg[id]->csid_rdi_rpp_pix_drop_pattern_addr);
 
 	/* Write max value to pixel drop period due to a bug in ver 480 HW */
 	if (camera_hw_version == CAM_CPAS_TITAN_480_V100 &&
 		path_data->drop_enable)
-		cam_io_w_mb(0x1F, soc_info->reg_map[0].mem_base +
+		cam_io_w_mb(0xF, soc_info->reg_map[0].mem_base +
 		csid_reg->rdi_reg[id]->csid_rdi_rpp_pix_drop_period_addr);
 	else
 		cam_io_w_mb(1, soc_info->reg_map[0].mem_base +
@@ -2292,6 +2330,14 @@ static int cam_ife_csid_init_config_rdi_path(
 		csid_reg->rdi_reg[id]->csid_rdi_rpp_line_drop_pattern_addr);
 	cam_io_w_mb(1, soc_info->reg_map[0].mem_base +
 		csid_reg->rdi_reg[id]->csid_rdi_rpp_line_drop_period_addr);
+
+	if (path_data->plane_type == CAM_IFE_HW_PLANE_UV) {
+		val = 1 << 3;
+		if (path_data->out_format == CAM_FORMAT_NV21)
+			val |= 1;
+		cam_io_w_mb(val, soc_info->reg_map[0].mem_base +
+			csid_reg->rdi_reg[id]->csid_rdi_yuv_chroma_conversion_addr);
+	}
 
 	/* Configure the halt mode */
 	cam_io_w_mb(0, soc_info->reg_map[0].mem_base +

@@ -105,6 +105,16 @@ enum cam_isp_hw_cmd_type {
 	CAM_ISP_HW_CMD_MAX,
 };
 
+/**
+ * enum cam_ife_csid_plane_type - Specify the plane type for YUV sensor
+ */
+enum cam_ife_hw_plane_type {
+	CAM_IFE_HW_PLANE_NONE,
+	CAM_IFE_HW_PLANE_Y,
+	CAM_IFE_HW_PLANE_UV,
+	CAM_IFE_HW_PLANE_MAX,
+};
+
 /*
  * struct cam_isp_resource_node:
  *

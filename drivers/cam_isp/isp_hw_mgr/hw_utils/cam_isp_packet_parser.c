@@ -469,7 +469,7 @@ int cam_isp_add_io_buffers(
 	dma_addr_t                          io_addr[CAM_PACKET_MAX_PLANES];
 	struct cam_buf_io_cfg              *io_cfg;
 	struct cam_isp_resource_node       *res;
-	struct cam_ife_hw_mgr_res          *hw_mgr_res;
+	struct cam_ife_hw_mgr_res          *hw_mgr_res = NULL;
 	struct cam_isp_hw_get_cmd_update    update_buf;
 	struct cam_isp_hw_get_wm_update     wm_update;
 	struct cam_isp_hw_get_wm_update     bus_rd_update;
@@ -477,12 +477,14 @@ int cam_isp_add_io_buffers(
 	struct cam_hw_fence_map_entry      *in_map_entries;
 	uint32_t                            kmd_buf_remain_size;
 	uint32_t                            i, j, num_out_buf, num_in_buf;
-	uint32_t                            res_id_out, res_id_in, plane_id;
+	uint32_t                            res_id_out, res_id_in;
+	uint32_t                            plane_id, start_plane_id, end_plane_id;
 	uint32_t                            io_cfg_used_bytes, num_ent;
 	size_t                              size;
 	int32_t                             hdl;
 	int                                 mmu_hdl;
 	bool                                mode, is_buf_secure;
+	bool                                skip_process;
 
 	io_cfg = (struct cam_buf_io_cfg *) ((uint8_t *)
 			&prepare->packet->payload +
@@ -510,7 +512,22 @@ int cam_isp_add_io_buffers(
 			io_cfg[i].direction);
 		CAM_DBG(CAM_ISP, "format: %d", io_cfg[i].format);
 
-		if (io_cfg[i].direction == CAM_BUF_OUTPUT) {
+		skip_process = false;
+
+setup_uv:
+		if (hw_mgr_res &&
+			(hw_mgr_res->plane_type == CAM_IFE_HW_PLANE_Y)) {
+			for (j = 0; j < size_isp_out; j++) {
+				hw_mgr_res = &res_list_isp_out[j];
+				if (hw_mgr_res->plane_type == CAM_IFE_HW_PLANE_UV) {
+					skip_process = true;
+					break;
+				}
+			}
+		}
+
+		if ((!skip_process) &&
+			(io_cfg[i].direction == CAM_BUF_OUTPUT)) {
 			res_id_out = io_cfg[i].resource_type & 0xFF;
 			if (res_id_out >= size_isp_out) {
 				CAM_ERR(CAM_ISP, "invalid out restype:%x",
@@ -575,7 +592,7 @@ int cam_isp_add_io_buffers(
 					return -EINVAL;
 				}
 			}
-		} else {
+		} else if (!skip_process) {
 			CAM_ERR(CAM_ISP, "Invalid io config direction :%d",
 				io_cfg[i].direction);
 			return -EINVAL;
@@ -591,7 +608,7 @@ int cam_isp_add_io_buffers(
 				continue;
 
 			res = hw_mgr_res->hw_res[j];
-			if (res->res_id != io_cfg[i].resource_type) {
+			if ((!skip_process) && (res->res_id != io_cfg[i].resource_type)) {
 				CAM_ERR(CAM_ISP,
 					"wm err res id:%d io res id:%d",
 					res->res_id, io_cfg[i].resource_type);
@@ -600,7 +617,18 @@ int cam_isp_add_io_buffers(
 
 			memset(io_addr, 0, sizeof(io_addr));
 
-			for (plane_id = 0; plane_id < CAM_PACKET_MAX_PLANES;
+			if (hw_mgr_res->plane_type == CAM_IFE_HW_PLANE_Y) {
+				start_plane_id = 0;
+				end_plane_id = 1;
+			} else if (hw_mgr_res->plane_type == CAM_IFE_HW_PLANE_UV) {
+				start_plane_id = 1;
+				end_plane_id = 2;
+			} else {
+				start_plane_id = 0;
+				end_plane_id = CAM_PACKET_MAX_PLANES;
+			}
+
+			for (plane_id = start_plane_id; plane_id < end_plane_id;
 						plane_id++) {
 				if (!io_cfg[i].mem_handle[plane_id])
 					break;
@@ -629,7 +657,8 @@ int cam_isp_add_io_buffers(
 
 				rc = cam_mem_get_io_buf(
 					io_cfg[i].mem_handle[plane_id],
-					mmu_hdl, &io_addr[plane_id], &size);
+					mmu_hdl, &io_addr[plane_id - start_plane_id],
+					&size);
 				if (rc) {
 					CAM_ERR(CAM_ISP,
 						"no io addr for plane%d",
@@ -639,11 +668,12 @@ int cam_isp_add_io_buffers(
 				}
 
 				/* need to update with offset */
-				io_addr[plane_id] +=
+				io_addr[plane_id - start_plane_id] +=
 						io_cfg[i].offsets[plane_id];
 				CAM_DBG(CAM_ISP,
-					"get io_addr for plane %d: 0x%llx, mem_hdl=0x%x",
-					plane_id, io_addr[plane_id],
+					"get io_addr for plane %d: 0x%llx, offset:%x mem_hdl=0x%x",
+					plane_id, io_addr[plane_id - start_plane_id],
+					io_cfg[i].offsets[plane_id],
 					io_cfg[i].mem_handle[plane_id]);
 
 				CAM_DBG(CAM_ISP,
@@ -651,6 +681,10 @@ int cam_isp_add_io_buffers(
 					mmu_hdl, (int)size,
 					io_addr[plane_id]+size);
 
+				CAM_DBG(CAM_ISP,
+					"plane_stride=%d slice_height=%d",
+					io_cfg[i].planes[plane_id].plane_stride,
+					io_cfg[i].planes[plane_id].slice_height);
 			}
 			if (!plane_id) {
 				CAM_ERR(CAM_ISP, "No valid planes for res%d",
@@ -671,20 +705,22 @@ int cam_isp_add_io_buffers(
 				rc = -ENOMEM;
 				return rc;
 			}
+			CAM_DBG(CAM_ISP, "plane_id:%d start_plane_id:%d, end_plane_id:%d",
+				plane_id, start_plane_id, end_plane_id);
 			update_buf.res = res;
 			update_buf.cmd_type = CAM_ISP_HW_CMD_GET_BUF_UPDATE;
 			update_buf.cmd.cmd_buf_addr = kmd_buf_info->cpu_addr +
 				kmd_buf_info->used_bytes/4 +
 					io_cfg_used_bytes/4;
 			wm_update.image_buf = io_addr;
-			wm_update.num_buf   = plane_id;
+			wm_update.num_buf   = plane_id - start_plane_id;
 			wm_update.io_cfg    = &io_cfg[i];
 			update_buf.cmd.size = kmd_buf_remain_size;
 			update_buf.wm_update = &wm_update;
 
-			CAM_DBG(CAM_ISP, "cmd buffer 0x%pK, size %d",
+			CAM_DBG(CAM_ISP, "cmd buffer 0x%pK, size %d wm_update.num_buf:%d",
 				update_buf.cmd.cmd_buf_addr,
-				update_buf.cmd.size);
+				update_buf.cmd.size, wm_update.num_buf);
 			rc = res->hw_intf->hw_ops.process_cmd(
 				res->hw_intf->hw_priv,
 				CAM_ISP_HW_CMD_GET_BUF_UPDATE, &update_buf,
@@ -696,7 +732,11 @@ int cam_isp_add_io_buffers(
 				rc = -ENOMEM;
 				return rc;
 			}
+
 			io_cfg_used_bytes += update_buf.cmd.used_bytes;
+
+			if (hw_mgr_res->plane_type == CAM_IFE_HW_PLANE_Y)
+				goto setup_uv;
 		}
 		for (j = 0; j < CAM_ISP_HW_SPLIT_MAX &&
 			io_cfg[i].direction == CAM_BUF_INPUT; j++) {

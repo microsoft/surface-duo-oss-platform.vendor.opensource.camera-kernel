@@ -118,6 +118,7 @@ struct cam_vfe_hw_get_hw_cap {
  *                           (Default is Master in case of Single VFE)
  * @dual_slave_core:         If Master and Slave exists, HW Index of Slave
  * @cdm_ops:                 CDM operations
+ * @plane_type:              Indicate plane type for YUV sensor which needs to do format conversion
  */
 struct cam_vfe_hw_vfe_out_acquire_args {
 	struct cam_isp_resource_node         *rsrc_node;
@@ -128,6 +129,7 @@ struct cam_vfe_hw_vfe_out_acquire_args {
 	uint32_t                              is_master;
 	uint32_t                              dual_slave_core;
 	struct cam_cdm_utils_ops             *cdm_ops;
+	enum cam_ife_hw_plane_type            plane_type;
 };
 
 /*
