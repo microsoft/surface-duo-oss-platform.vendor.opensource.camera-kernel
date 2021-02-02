@@ -1054,31 +1054,30 @@ static int __cam_isp_ctx_apply_req_offline(
 	cfg.num_hw_update_entries = req_isp->num_cfg;
 	cfg.priv  = &req_isp->hw_update_data;
 	cfg.init_packet = 0;
+	spin_lock_bh(&ctx->lock);
+	/* moving state change before hw_config, because the IRQ can hit us
+	 * before function call returns. Need to consider better place for
+	 * changing state
+	 */
+	ctx_isp->substate_activated = CAM_ISP_CTX_ACTIVATED_APPLIED;
 
+	atomic_set(&ctx_isp->rxd_epoch, 0);
+
+	ctx_isp->last_applied_req_id = req->request_id;
+
+	list_del_init(&req->list);
+	list_add_tail(&req->list, &ctx->wait_req_list);
+
+	spin_unlock_bh(&ctx->lock);
+
+	CAM_DBG(CAM_ISP, "New substate state %d, applied req %lld",
+		CAM_ISP_CTX_ACTIVATED_APPLIED,
+		ctx_isp->last_applied_req_id);
+
+	__cam_isp_ctx_update_state_monitor_array(ctx_isp,
+		CAM_ISP_STATE_CHANGE_TRIGGER_APPLIED,
+		req->request_id);
 	rc = ctx->hw_mgr_intf->hw_config(ctx->hw_mgr_intf->hw_mgr_priv, &cfg);
-	if (rc) {
-		CAM_ERR_RATE_LIMIT(CAM_ISP, "Can not apply the configuration");
-	} else {
-		spin_lock_bh(&ctx->lock);
-
-		atomic_set(&ctx_isp->rxd_epoch, 0);
-
-		ctx_isp->substate_activated = CAM_ISP_CTX_ACTIVATED_APPLIED;
-		ctx_isp->last_applied_req_id = req->request_id;
-
-		list_del_init(&req->list);
-		list_add_tail(&req->list, &ctx->wait_req_list);
-
-		spin_unlock_bh(&ctx->lock);
-
-		CAM_DBG(CAM_ISP, "New substate state %d, applied req %lld",
-			CAM_ISP_CTX_ACTIVATED_APPLIED,
-			ctx_isp->last_applied_req_id);
-
-		__cam_isp_ctx_update_state_monitor_array(ctx_isp,
-			CAM_ISP_STATE_CHANGE_TRIGGER_APPLIED,
-			req->request_id);
-	}
 end:
 	return rc;
 }
@@ -1199,6 +1198,19 @@ static int __cam_isp_ctx_reg_upd_in_applied_state(
 		CAM_ISP_STATE_CHANGE_TRIGGER_REG_UPDATE, request_id);
 
 end:
+	return rc;
+}
+
+static int __cam_isp_ctx_offline_epoch_in_bubble_state(
+	struct cam_isp_context *ctx_isp, void *evt_data)
+{
+	int rc = 0;
+
+	CAM_DBG(CAM_ISP, "Offline IFE RUP missed!");
+	rc = __cam_isp_ctx_reg_upd_in_applied_state(ctx_isp, evt_data);
+	if (!rc)
+		rc = __cam_isp_ctx_offline_epoch_in_activated_state(ctx_isp,
+				evt_data);
 	return rc;
 }
 
@@ -2398,7 +2410,7 @@ static struct cam_isp_ctx_irq_ops
 			__cam_isp_ctx_handle_error,
 			__cam_isp_ctx_sof_in_activated_state,
 			__cam_isp_ctx_reg_upd_in_applied_state,
-			NULL,
+			__cam_isp_ctx_offline_epoch_in_bubble_state,
 			NULL,
 			__cam_isp_ctx_buf_done_in_applied,
 		},
