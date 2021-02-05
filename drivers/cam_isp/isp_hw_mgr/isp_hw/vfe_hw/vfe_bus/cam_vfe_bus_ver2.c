@@ -3050,7 +3050,7 @@ static int cam_vfe_bus_update_wm(void *priv, void *cmd_args,
 	struct cam_vfe_bus_ver2_vfe_out_data     *vfe_out_data = NULL;
 	struct cam_vfe_bus_ver2_wm_resource_data *wm_data = NULL;
 	struct cam_vfe_bus_ver2_reg_offset_ubwc_client *ubwc_client = NULL;
-	uint32_t *reg_val_pair;
+	uint32_t *reg_val_pair = NULL;
 	uint32_t  i, j, k, size = 0;
 	uint32_t  frame_inc = 0, val;
 	uint32_t loop_size = 0;
@@ -3214,7 +3214,7 @@ static int cam_vfe_bus_update_hfr(void *priv, void *cmd_args,
 	struct cam_vfe_bus_ver2_vfe_out_data     *vfe_out_data = NULL;
 	struct cam_vfe_bus_ver2_wm_resource_data *wm_data = NULL;
 	struct cam_isp_port_hfr_config           *hfr_cfg = NULL;
-	uint32_t *reg_val_pair;
+	uint32_t *reg_val_pair = NULL;
 	uint32_t  i, j, size = 0;
 
 	bus_priv = (struct cam_vfe_bus_ver2_priv  *) priv;
