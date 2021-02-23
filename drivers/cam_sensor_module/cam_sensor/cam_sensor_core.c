@@ -710,11 +710,30 @@ int cam_sensor_match_id(struct cam_sensor_ctrl_t *s_ctrl)
 		return -EINVAL;
 	}
 
+    if (slave_info->sensor_id_reg_addr == 0x1A0A){
+        uint32_t chipid1 = 0;
+        uint32_t chipid2 = 0;
+        rc = camera_io_dev_read(
+		&(s_ctrl->io_master_info),0x1A,
+		&chipid1, CAMERA_SENSOR_I2C_TYPE_WORD,
+		CAMERA_SENSOR_I2C_TYPE_BYTE);
+        if(!rc){
+            rc = camera_io_dev_read(
+            &(s_ctrl->io_master_info),0x0A,
+            &chipid2, CAMERA_SENSOR_I2C_TYPE_WORD,
+            CAMERA_SENSOR_I2C_TYPE_3B);
+        }
+        chipid = ((chipid1 & 0xC8 ?1:0) << 12) | ((chipid2 & 0xC80000 ?1:0) << 8) |
+            ((chipid2 & 0xC800 ?1:0) << 4) | (chipid2 & 0xC8 ?1:0);
+        CAM_DBG(CAM_SENSOR, "match id data conversion camera_id:%d, read id: 0x%x expected id: 0x%x, chipid1:0x%x, chipid2:0x%x",s_ctrl->id,
+		chipid, slave_info->sensor_id, chipid1, chipid2);
+    }else{
 	rc = camera_io_dev_read(
 		&(s_ctrl->io_master_info),
 		slave_info->sensor_id_reg_addr,
 		&chipid, CAMERA_SENSOR_I2C_TYPE_WORD,
 		CAMERA_SENSOR_I2C_TYPE_WORD);
+    }
 
 	CAM_DBG(CAM_SENSOR, "read id: 0x%x expected id 0x%x:",
 		chipid, slave_info->sensor_id);
