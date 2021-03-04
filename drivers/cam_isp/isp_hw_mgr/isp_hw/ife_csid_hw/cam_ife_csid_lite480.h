@@ -174,6 +174,7 @@ static struct cam_ife_csid_rdi_reg_offset
 	.csid_rdi_rpp_pix_drop_period_addr        = 0x528,
 	.csid_rdi_rpp_line_drop_pattern_addr      = 0x52c,
 	.csid_rdi_rpp_line_drop_period_addr       = 0x530,
+	.csid_rdi_yuv_chroma_conversion_addr      = 0x534,
 	.csid_rdi_rst_strobes_addr                = 0x540,
 	.csid_rdi_status_addr                     = 0x550,
 	.csid_rdi_misr_val0_addr                  = 0x554,

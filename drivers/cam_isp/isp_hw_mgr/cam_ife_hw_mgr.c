@@ -1109,7 +1109,7 @@ static int cam_ife_hw_mgr_acquire_res_ife_out_rdi(
 		CAM_ERR(CAM_ISP, "invalid resource type");
 		goto err;
 	}
-	CAM_DBG(CAM_ISP, "vfe_in_res_id = %d, vfe_out_red_id = %d",
+	CAM_DBG(CAM_ISP, "vfe_in_res_id = %x, vfe_out_red_id = %x",
 		vfe_in_res_id, vfe_out_res_id);
 
 	vfe_acquire.rsrc_type = CAM_ISP_RESOURCE_VFE_OUT;
@@ -1119,18 +1119,23 @@ static int cam_ife_hw_mgr_acquire_res_ife_out_rdi(
 	for (i = 0; i < in_port->num_out_res; i++) {
 		out_port = &in_port->data[i];
 
-		CAM_DBG(CAM_ISP, "i = %d, vfe_out_res_id = %d, out_port: %d",
+		CAM_DBG(CAM_ISP, "i = %d, vfe_out_res_id = %x, out_port: %x",
 			i, vfe_out_res_id, out_port->res_type);
 
-		if (vfe_out_res_id != out_port->res_type)
+		if ((vfe_out_res_id != out_port->res_type) &&
+			(ife_src_res->plane_type != CAM_IFE_HW_PLANE_UV))
 			continue;
 
 		vfe_acquire.vfe_out.cdm_ops = ife_ctx->cdm_ops;
 		vfe_acquire.priv = ife_ctx;
 		vfe_acquire.vfe_out.out_port_info = out_port;
+		if (ife_src_res->plane_type == CAM_IFE_HW_PLANE_UV)
+			vfe_acquire.vfe_out.out_port_info->res_type =
+				vfe_out_res_id;
 		vfe_acquire.vfe_out.split_id = CAM_ISP_HW_SPLIT_LEFT;
 		vfe_acquire.vfe_out.unique_id = ife_ctx->ctx_index;
 		vfe_acquire.vfe_out.is_dual = 0;
+		vfe_acquire.vfe_out.plane_type = ife_src_res->plane_type;
 		vfe_acquire.event_cb = cam_ife_hw_mgr_event_handler;
 		hw_intf = ife_src_res->hw_res[0]->hw_intf;
 		rc = hw_intf->hw_ops.reserve(hw_intf->hw_priv,
@@ -1146,11 +1151,12 @@ static int cam_ife_hw_mgr_acquire_res_ife_out_rdi(
 
 	if (i == in_port->num_out_res) {
 		CAM_ERR(CAM_ISP,
-			"Cannot acquire out resource, i=%d, num_out_res=%d",
+			"Cannot acquire out resource, i=%d, num_out_res=%x",
 			i, in_port->num_out_res);
 		goto err;
 	}
 
+	ife_out_res->plane_type = vfe_acquire.vfe_out.plane_type;
 	ife_out_res->hw_res[0] = vfe_acquire.vfe_out.rsrc_node;
 	ife_out_res->is_dual_vfe = 0;
 	ife_out_res->res_id = vfe_out_res_id;
@@ -1530,6 +1536,9 @@ static int cam_ife_hw_mgr_acquire_res_ife_src(
 	ife_hw_mgr = ife_ctx->hw_mgr;
 
 	list_for_each_entry(csid_res, &ife_ctx->res_list_ife_csid, list) {
+		CAM_DBG(CAM_ISP, "acquire ife src for res :%x, num_children:%d",
+			csid_res->res_id, csid_res->num_children);
+
 		if (csid_res->num_children && !acquire_lcr)
 			continue;
 
@@ -1598,6 +1607,7 @@ static int cam_ife_hw_mgr_acquire_res_ife_src(
 			(enum cam_ife_hw_mgr_res_type)vfe_acquire.rsrc_type;
 		ife_src_res->res_id = vfe_acquire.vfe_in.res_id;
 		ife_src_res->is_dual_vfe = csid_res->is_dual_vfe;
+		ife_src_res->plane_type = csid_res->plane_type;
 
 		for (i = 0; i < CAM_ISP_HW_SPLIT_MAX; i++) {
 			if (!csid_res->hw_res[i])
@@ -1710,7 +1720,8 @@ static int cam_ife_mgr_acquire_cid_res(
 	struct cam_ife_hw_mgr_ctx           *ife_ctx,
 	struct cam_isp_in_port_generic_info *in_port,
 	struct cam_ife_hw_mgr_res          **cid_res,
-	enum cam_ife_pix_path_res_id         path_res_id)
+	enum cam_ife_pix_path_res_id         path_res_id,
+	enum cam_ife_hw_plane_type           plane_type)
 {
 	int rc = -1;
 	int i, j;
@@ -1735,7 +1746,9 @@ static int cam_ife_mgr_acquire_cid_res(
 	csid_acquire.res_type = CAM_ISP_RESOURCE_CID;
 	csid_acquire.in_port = in_port;
 	csid_acquire.res_id =  path_res_id;
-	CAM_DBG(CAM_ISP, "path_res_id %d", path_res_id);
+	csid_acquire.plane_type = plane_type;
+	CAM_DBG(CAM_ISP, "path_res_id %d, plane_type %d",
+		path_res_id, csid_acquire.plane_type);
 
 	if (in_port->num_out_res)
 		out_port = &(in_port->data[0]);
@@ -1906,7 +1919,7 @@ static int cam_ife_hw_mgr_acquire_res_ife_csid_pxl(
 		path_res_id = CAM_IFE_PIX_PATH_RES_PPP;
 
 	rc = cam_ife_mgr_acquire_cid_res(ife_ctx, in_port, &cid_res,
-		path_res_id);
+		path_res_id, CAM_IFE_HW_PLANE_NONE);
 
 	if (rc) {
 		CAM_ERR(CAM_ISP, "Acquire IFE CID resource Failed");
@@ -2034,10 +2047,12 @@ static int cam_ife_hw_mgr_acquire_res_ife_csid_rdi(
 	struct cam_ife_hw_mgr                *ife_hw_mgr;
 	struct cam_ife_hw_mgr_res            *csid_res;
 	struct cam_ife_hw_mgr_res            *cid_res;
+	struct cam_ife_hw_mgr_res            *csid_res_y = NULL;
 	struct cam_hw_intf                   *hw_intf;
 	struct cam_isp_out_port_generic_info *out_port;
 	struct cam_csid_hw_reserve_resource_args  csid_acquire;
 	enum cam_ife_pix_path_res_id         path_res_id;
+	bool                                 format_convert = false;
 
 	ife_hw_mgr = ife_ctx->hw_mgr;
 
@@ -2048,9 +2063,19 @@ static int cam_ife_hw_mgr_acquire_res_ife_csid_rdi(
 		if (path_res_id == CAM_IFE_PIX_PATH_RES_MAX)
 			continue;
 
+		if (path_res_id <= CAM_IFE_PIX_PATH_RES_RDI_3) {
+			if ((in_port->format == CAM_FORMAT_YUV422) &&
+				((out_port->format == CAM_FORMAT_NV12) ||
+				(out_port->format == CAM_FORMAT_NV21)))
+				format_convert = true;
+			else
+				format_convert = false;
+		}
+
+acquire_for_uv:
 		/* get cid resource */
 		rc = cam_ife_mgr_acquire_cid_res(ife_ctx, in_port, &cid_res,
-			path_res_id);
+			path_res_id, csid_acquire.plane_type);
 		if (rc) {
 			CAM_ERR(CAM_ISP, "Acquire IFE CID resource Failed");
 			goto end;
@@ -2071,6 +2096,13 @@ static int cam_ife_hw_mgr_acquire_res_ife_csid_rdi(
 		csid_acquire.in_port = in_port;
 		csid_acquire.out_port = out_port;
 		csid_acquire.node_res = NULL;
+
+		if (csid_res_y)
+			csid_acquire.plane_type = CAM_IFE_HW_PLANE_UV;
+		else if (format_convert)
+			csid_acquire.plane_type = CAM_IFE_HW_PLANE_Y;
+		else
+			csid_acquire.plane_type = CAM_IFE_HW_PLANE_NONE;
 
 		/*
 		 * Enable RDI pixel drop by default. CSID will enable only for
@@ -2108,12 +2140,29 @@ static int cam_ife_hw_mgr_acquire_res_ife_csid_rdi(
 		csid_res->is_dual_vfe = 0;
 		csid_res->hw_res[0] = csid_acquire.node_res;
 		csid_res->hw_res[1] = NULL;
+		csid_res->plane_type = csid_acquire.plane_type;
 		csid_res->parent = cid_res;
 		cid_res->child[cid_res->num_children++] =
 			csid_res;
+
+		if (csid_res_y)
+			csid_res_y = NULL;
+
 		CAM_DBG(CAM_ISP, "acquire res %d CID children = %d",
 			csid_acquire.res_id, cid_res->num_children);
 		cam_ife_hw_mgr_put_res(&ife_ctx->res_list_ife_csid, &csid_res);
+
+		if (format_convert) {
+			if (in_port->usage_type)
+				goto put_res;
+
+			csid_res_y = csid_res;
+			csid_acquire.plane_type = CAM_IFE_HW_PLANE_UV;
+			format_convert = false;
+
+			CAM_DBG(CAM_ISP, "Acquire RDI resource for UV plane");
+			goto acquire_for_uv;
+		}
 
 	}
 
@@ -2259,7 +2308,8 @@ static int cam_ife_mgr_check_and_update_fe_v2(
 			CAM_ERR(CAM_ISP, "buffer size is not enough");
 			return -EINVAL;
 		}
-		CAM_DBG(CAM_ISP, "in_port%d res_type %d", i,
+		CAM_DBG(CAM_ISP, "in_port%d:%d res_type %d", i,
+			acquire_hw_info->num_inputs,
 			in_port->res_type);
 		if (in_port->res_type == CAM_ISP_IFE_IN_RES_RD) {
 			ife_ctx->is_fe_enable = true;
@@ -2810,7 +2860,8 @@ static int cam_ife_mgr_acquire_hw(void *hw_mgr_priv, void *acquire_hw_args)
 			CAM_ERR(CAM_ISP, "Failed in parsing: %d", rc);
 			goto free_res;
 		}
-		CAM_DBG(CAM_ISP, "in_res_type %x", in_port->res_type);
+		CAM_DBG(CAM_ISP, "%d:%d in_res_type %x",
+			i, acquire_hw_info->num_inputs, in_port->res_type);
 
 		rc = cam_ife_mgr_acquire_hw_for_ctx(ife_ctx, in_port,
 			&num_pix_port_per_in, &num_rdi_port_per_in,
