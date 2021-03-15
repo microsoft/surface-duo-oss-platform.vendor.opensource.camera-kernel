@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _CAM_IFE_HW_MGR_H_
@@ -85,6 +85,7 @@ struct ctx_base_info {
  * @enable_diag_sensor_status: enable sensor diagnosis status
  * @enable_req_dump:           Enable request dump on HW errors
  * @per_req_reg_dump:          Enable per request reg dump
+ * @disable_ubwc_comp:         Disable UBWC compression
  *
  */
 struct cam_ife_hw_mgr_debug {
@@ -95,6 +96,7 @@ struct cam_ife_hw_mgr_debug {
 	uint32_t       camif_debug;
 	bool           enable_req_dump;
 	bool           per_req_reg_dump;
+	bool           disable_ubwc_comp;
 };
 
 /**
@@ -146,6 +148,8 @@ struct cam_ife_hw_mgr_debug {
  * @ts                      captured timestamp when the ctx is acquired
  * @is_offline              Indicate whether context is for offline IFE
  * @dsp_enabled             Indicate whether dsp is enabled in this context
+ * @dual_ife_irq_mismatch_cnt   irq mismatch count value per core, used for
+ *                              dual VFE
  */
 struct cam_ife_hw_mgr_ctx {
 	struct list_head                list;
@@ -197,6 +201,7 @@ struct cam_ife_hw_mgr_ctx {
 	struct timespec64               ts;
 	bool                            is_offline;
 	bool                            dsp_enabled;
+	uint32_t                        dual_ife_irq_mismatch_cnt;
 };
 
 /**

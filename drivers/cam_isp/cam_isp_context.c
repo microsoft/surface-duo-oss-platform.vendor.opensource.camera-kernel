@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/debugfs.h>
@@ -1236,6 +1236,14 @@ static int __cam_isp_ctx_notify_sof_in_activated_state(
 			return rc;
 		}
 
+		if (ctx_isp->last_sof_timestamp ==
+			ctx_isp->sof_timestamp_val) {
+			CAM_DBG(CAM_ISP,
+				"Tasklet delay detected! Bubble frame check skipped, sof_timestamp: %lld",
+				ctx_isp->sof_timestamp_val);
+			goto notify_only;
+		}
+
 		req = list_first_entry(&ctx->active_req_list,
 			struct cam_ctx_request, list);
 		req_isp = (struct cam_isp_ctx_req *) req->req_priv;
@@ -1254,14 +1262,28 @@ static int __cam_isp_ctx_notify_sof_in_activated_state(
 				req->request_id,
 				ctx_isp->active_req_cnt, ctx->ctx_id);
 		} else if (req_isp->bubble_detected) {
-			ctx_isp->bubble_frame_cnt++;
-			CAM_DBG(CAM_ISP,
-				"Waiting on bufdone for bubble req: %lld, since frame_cnt = %lld",
-				req->request_id, ctx_isp->bubble_frame_cnt);
+			if (ctx_isp->last_sof_timestamp !=
+				ctx_isp->sof_timestamp_val) {
+				ctx_isp->bubble_frame_cnt++;
+				CAM_DBG(CAM_ISP,
+					"Waiting on bufdone bubble req %lld ctx %u frame_cnt %lld link 0x%x",
+					req->request_id, ctx->ctx_id,
+					ctx_isp->bubble_frame_cnt,
+					ctx->link_hdl);
+			} else {
+				CAM_DBG(CAM_ISP,
+					"Possible tasklet delay req %lld ctx %u link 0x%x ts %lld",
+					req->request_id, ctx->ctx_id,
+					ctx->link_hdl,
+					ctx_isp->sof_timestamp_val);
+			}
 		} else
-			CAM_DBG(CAM_ISP, "Delayed bufdone for req: %lld",
-				req->request_id);
+			CAM_DBG(CAM_ISP,
+				"Delayed bufdone for req: %lld ctx %u link 0x%x",
+				req->request_id, ctx->ctx_id, ctx->link_hdl);
 	}
+
+notify_only:
 
 	if (ctx->ctx_crm_intf && ctx->ctx_crm_intf->notify_trigger &&
 		ctx_isp->active_req_cnt <= 2) {
@@ -1306,7 +1328,7 @@ static int __cam_isp_ctx_notify_sof_in_activated_state(
 			ctx->ctx_id);
 		rc = -EFAULT;
 	}
-
+	ctx_isp->last_sof_timestamp = ctx_isp->sof_timestamp_val;
 	return 0;
 }
 
@@ -4354,7 +4376,7 @@ static int __cam_isp_ctx_acquire_hw_v2(struct cam_context *ctx,
 		ctx_isp->offline_context = true;
 
 		rc = cam_req_mgr_workq_create("offline_ife", 20,
-			&ctx_isp->workq, CRM_WORKQ_USAGE_IRQ, 0,
+			&ctx_isp->workq, CRM_WORKQ_USAGE_IRQ, 0, false,
 			cam_req_mgr_process_workq_offline_ife_worker);
 		if (rc)
 			CAM_ERR(CAM_ISP,

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2018-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _CAM_VFE175_130_H_
@@ -376,6 +376,10 @@ static struct cam_vfe_top_ver2_reg_offset_common vfe175_130_top_common_reg = {
 	.three_D_cfg              = 0x00000054,
 	.violation_status         = 0x0000007C,
 	.reg_update_cmd           = 0x000004AC,
+	.irq_mask_0               = 0x0000005C,
+	.irq_mask_1               = 0x00000060,
+	.irq_status_0             = 0x0000006C,
+	.irq_status_1             = 0x00000070,
 };
 
 static struct cam_vfe_rdi_ver2_reg vfe175_130_rdi_reg = {
@@ -511,6 +515,7 @@ static struct cam_vfe_bus_ver2_reg_offset_ubwc_3_client
 	.mode_cfg_0       = 0x00002544,
 	.mode_cfg_1       = 0x000025A4,
 	.bw_limit         = 0x000025A0,
+	.ubwc_comp_en_bit = BIT(1),
 };
 
 static struct cam_vfe_bus_ver2_reg_offset_ubwc_3_client
@@ -524,6 +529,7 @@ static struct cam_vfe_bus_ver2_reg_offset_ubwc_3_client
 	.mode_cfg_0       = 0x00002644,
 	.mode_cfg_1       = 0x000026A4,
 	.bw_limit         = 0x000026A0,
+	.ubwc_comp_en_bit = BIT(1),
 };
 
 static struct cam_vfe_bus_ver2_reg_offset_ubwc_3_client
@@ -537,6 +543,7 @@ static struct cam_vfe_bus_ver2_reg_offset_ubwc_3_client
 	.mode_cfg_0       = 0x00003644,
 	.mode_cfg_1       = 0x000036A4,
 	.bw_limit         = 0x000036A0,
+	.ubwc_comp_en_bit = BIT(1),
 };
 
 static struct cam_vfe_bus_ver2_reg_offset_ubwc_3_client
@@ -550,6 +557,7 @@ static struct cam_vfe_bus_ver2_reg_offset_ubwc_3_client
 	.mode_cfg_0       = 0x00003744,
 	.mode_cfg_1       = 0x000037A4,
 	.bw_limit         = 0x000037A0,
+	.ubwc_comp_en_bit = BIT(1),
 };
 
 static struct cam_vfe_bus_rd_ver1_hw_info vfe175_130_bus_rd_hw_info = {
