@@ -35,8 +35,8 @@
 #include <linux/ion.h>
 #include <linux/msm_ion.h>
 
-#include <uapi/media/ais_v4l2loopback.h>
-#include <uapi/media/cam_defs.h>
+#include <media/ais_v4l2loopback.h>
+#include <media/cam_defs.h>
 
 
 #include <linux/init.h>
