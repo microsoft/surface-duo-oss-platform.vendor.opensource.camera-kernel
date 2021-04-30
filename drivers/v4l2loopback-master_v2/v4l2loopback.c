@@ -6,7 +6,7 @@
  * Copyright (C) 2010-2019 IOhannes m zmoelnig (zmoelnig@iem.at)
  * Copyright (C) 2011 Stefan Diewald (stefan.diewald@mytum.de)
  * Copyright (C) 2012 Anton Novikov (random.plant@gmail.com)
- * Copyright (c) 2020, The Linux Foundation. All rights reserved
+ * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,8 +31,8 @@
 #include <media/v4l2-fh.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-event.h>
-#include <linux/ion_kernel.h>
 #include <linux/dma-buf.h>
+#include <linux/ion.h>
 #include <linux/msm_ion.h>
 
 #include <uapi/media/ais_v4l2loopback.h>
@@ -43,7 +43,7 @@
 #include <linux/kprobes.h>
 #include <asm/traps.h>
 
-
+#include "cam_common_util.h"
 
 # define HAVE__V4L2_DEVICE
 # include <media/v4l2-device.h>
@@ -145,8 +145,15 @@ static inline void v4l2_device_unregister(struct v4l2_device *v4l2_dev)
 #endif
 
 /* Timeout value in msec */
-#define GPARAM_TIMEOUT 1000
-#define SPARAM_TIMEOUT 1000
+#define GPARAM_TIMEOUT 2000
+#define SPARAM_TIMEOUT 2000
+#define OPEN_TIMEOUT 4000
+#define CLOSE_TIMEOUT 4000
+#define START_TIMEOUT 4000
+#define STOP_TIMEOUT 4000
+#define ALLOCBUFS_TIMEOUT 4000
+
+
 
 
 
@@ -230,17 +237,24 @@ MODULE_PARM_DESC(max_height, "maximum frame height");
 #define CID_CROP_DATASIZE      (V4L2_CTRL_CLASS_USER + 0x1000)
 
 static int v4l2loopback_s_ctrl(struct v4l2_ctrl *ctrl);
-static const struct v4l2_ctrl_ops v4l2loopback_ctrl_ops = {
-	.s_ctrl = v4l2loopback_s_ctrl,
-};
+static int v4l2loopback_g_ctrl(struct v4l2_ctrl *ctrl);
+
 static int v4l2loopback_datasize_g_ctrl(struct v4l2_ctrl *ctrl);
 static int v4l2loopback_datasize_s_ctrl(struct v4l2_ctrl *ctrl);
 static int v4l2loopback_datasize_try_ctrl(struct v4l2_ctrl *ctrl);
+
+static const struct v4l2_ctrl_ops v4l2loopback_ctrl_ops = {
+	.s_ctrl = v4l2loopback_s_ctrl,
+	.try_ctrl = v4l2loopback_datasize_try_ctrl,
+	.g_volatile_ctrl = v4l2loopback_g_ctrl,
+};
+
 static const struct v4l2_ctrl_ops v4l2loopback_datasize_ctrl_ops = {
 	.s_ctrl = v4l2loopback_datasize_s_ctrl,
 	.try_ctrl = v4l2loopback_datasize_try_ctrl,
 	.g_volatile_ctrl = v4l2loopback_datasize_g_ctrl
 };
+
 static const struct v4l2_ctrl_config v4l2loopback_ctrl_keepformat = {
 	.ops = &v4l2loopback_ctrl_ops,
 	.id = CID_KEEP_FORMAT,
@@ -293,11 +307,49 @@ static const struct v4l2_ctrl_config v4l2loopback_ctrl_datasize = {
 			V4L2LOOPBACK_SIZE_DEFAULT_HEIGHT,
 };
 
-enum V4L2loopback_IO_MODE {
+static const struct v4l2_ctrl_config v4l2loopback_ctrl_buffernum = {
+	.ops = &v4l2loopback_ctrl_ops,
+	.id = V4L2_CID_MIN_BUFFERS_FOR_CAPTURE,
+	.name = "buffer_num",
+	.type = V4L2_CTRL_TYPE_INTEGER,
+	.min = 4,
+	.max = 20,
+	.step = 1,
+	.def = 4,   // def >= min
+};
+
+enum V4L2_LOOPBACK_IO_MODE {
 	V4L2L_IO_MODE_MMAP   = 0,
 	V4L2L_IO_MODE_USERPTR = 1,
 	V4L2L_IO_MODE_DMABUF = 2,
 };
+
+/* The initial state is V4L2L_READY_FOR_OUTPUT, when ais_v4l2_proxy opens
+ * device, the state becomes V4L2L_READY_FOR_CAPTURE; when v4l2 app opens
+ * the device, the state becomes V4L2L_OPENED, can't be opened by app again.
+ * When v4l2 app close the device, the state becomes V4L2L_READY_FOR_CAPTURE
+ * again. when proxy close the device, the state becomes V4L2L_READY_FOR_OUTPUT
+ * again.
+ * Todo: when the app/pxoy is closed by kill -9, the device is not closed
+ * correctly. The state will be corrupted. For this situation, need reset
+ * the state. Need find a way to reset the state to initial state. eg. when
+ * a new proxy opens the device, kick off the other proxy/app and reset the
+ * state.
+ */
+enum V4L2_LOOPBACK_STATE {
+	V4L2L_READY_FOR_OUTPUT = 0x1,
+	V4L2L_READY_FOR_CAPTURE = 0x2,
+	V4L2L_OPENED = 0x22,
+};
+
+enum V4L2_LOOPBACK_BUF_STATE {
+	V4L2L_BUF_READY_Q   = 0,
+	V4L2L_BUF_DONE_Q    = 1,
+	V4L2L_BUF_USER_ACQUIRED  = 2,
+	V4L2L_BUF_PROXY_ACQUIRED = 3,
+	V4L2L_BUF_PENDING = 4,
+};
+
 
 /* module structures */
 struct v4l2loopback_private {
@@ -312,8 +364,10 @@ struct v4l2loopback_private {
 struct v4l2l_buffer {
 	struct v4l2_buffer buffer;
 	struct list_head list_head;
+
 	int use_count;
 	uintptr_t kvaddr;
+	enum V4L2_LOOPBACK_BUF_STATE state;
 };
 
 struct v4l2_loopback_device {
@@ -332,6 +386,10 @@ struct v4l2_loopback_device {
 	struct completion gparam_complete;
 	int qcarcam_sparam_ret;
 
+	/* qcarcam control ret*/
+	int qcarcam_ctrl_ret;
+	struct completion ctrl_complete;
+
 	struct v4l2_crop frame_crop;
 	unsigned long frame_jiffies;
 
@@ -344,7 +402,7 @@ struct v4l2_loopback_device {
 				* nominal framerate
 				*/
 
-	enum V4L2loopback_IO_MODE io_mode;
+	enum V4L2_LOOPBACK_IO_MODE io_mode;
 
 	/* buffers stuff */
 	u8 *image;        /* pointer to actual buffers data,
@@ -353,7 +411,8 @@ struct v4l2_loopback_device {
 	unsigned long int imagesize;  /* size of buffers data */
 
 	struct dma_buf *dmabufs[MAX_BUFFERS];
-
+	struct completion allocbufs_complete;
+	int allocbufs_ret;
 	int buffers_number;  /* should not be big, 4 is a good choice */
 	struct v4l2l_buffer buffers[MAX_BUFFERS]; /* inner driver buffers */
 	int used_buffers; /* number of the actually used buffers */
@@ -361,6 +420,10 @@ struct v4l2_loopback_device {
 
 	int write_position; /* number of last written frame + 1 */
 	struct list_head outbufs_list; /* buffers in output DQBUF order */
+	struct list_head capbufs_list; /* buffers in capture DQBUF order */
+	struct mutex outbufs_mutex;
+	struct mutex capbufs_mutex;
+
 	int bufpos2index[MAX_BUFFERS]; /* mapping of (read/write_position
 					* % used_buffers)
 					* to inner buffer index
@@ -385,14 +448,8 @@ struct v4l2_loopback_device {
 	atomic_t open_count;
 
 
-	int ready_for_capture;/* set to true when at least one writer opened
-			       * device and negotiated format
-			       */
-	int ready_for_output; /* set to true when no writer
-			       * is currently attached
-			       * this differs slightly from !ready_for_capture,
-			       * e.g. when using fallback images
-			       */
+	enum V4L2_LOOPBACK_STATE state;
+
 	int announce_all_caps;/* set to false, if device caps (OUTPUT/CAPTURE)
 			       * should only be announced if the resp. "ready"
 			       * flag is set; default=TRUE
@@ -402,18 +459,19 @@ struct v4l2_loopback_device {
 
 	wait_queue_head_t read_event;
 	spinlock_t lock;
+	struct mutex buf_mutex;
 };
 
 /* types of opener shows what opener wants to do with loopback */
-enum opener_type {
-	UNNEGOTIATED = 0,
-	READER = 1,
-	WRITER = 2,
+enum v4l2_loopback_opener_type {
+	V4L2L_UNNEGOTIATED = 0,
+	V4L2L_READER = 1,
+	V4L2L_WRITER = 2,
 };
 
 /* struct keeping state and type of opener */
 struct v4l2_loopback_opener {
-	enum opener_type type;
+	enum v4l2_loopback_opener_type type;
 	int vidioc_enum_frameintervals_calls;
 	int read_position; /* number of last processed frame + 1 or
 			    * write_position - 1 if reader went out of sync
@@ -465,7 +523,6 @@ static void send_v4l2_event(struct video_device *vdev, unsigned int type,
 	enum AIS_V4L2_NOTIFY_CMD cmd)
 {
 	struct v4l2_event event;
-	__u64 *payload_data = NULL;
 
 	event.id = cmd;
 	event.type = type;
@@ -476,100 +533,46 @@ static void send_v4l2_event(struct video_device *vdev, unsigned int type,
 }
 
 static void send_v4l2_event_ex(struct video_device *vdev, unsigned int type,
-	enum AIS_V4L2_NOTIFY_CMD cmd, u8 code)
+	enum AIS_V4L2_NOTIFY_CMD cmd, u8 data0)
 {
 	struct v4l2_event event;
-	__u64 *payload_data = NULL;
 
 	event.id = cmd;
 	event.type = type;
-	event.u.data[0] = code;
+	event.u.data[0] = data0;
 
 	v4l2_event_queue(vdev, &event);
 	pr_debug("send v4l2 event for ais_v4l2loopback :%d\n",
 		cmd);
 }
 
-static int cam_mem_util_map_cpu_va(struct dma_buf *dmabuf,
-	uintptr_t *vaddr,
-	size_t *len)
+static void send_v4l2_event_ex2(struct video_device *vdev, unsigned int type,
+	enum AIS_V4L2_NOTIFY_CMD cmd, u8 data0, u8 size, __u64 payload)
 {
-	int i, j, rc;
-	void *addr;
+	struct v4l2_event event;
 
-	/*
-	 * dma_buf_begin_cpu_access() and dma_buf_end_cpu_access()
-	 * need to be called in pair to avoid stability issue.
-	 */
-	rc = dma_buf_begin_cpu_access(dmabuf, DMA_BIDIRECTIONAL);
-	if (rc) {
-		pr_err("dma begin access failed rc=%d\n", rc);
-		return rc;
-	}
+	event.id = cmd;
+	event.type = type;
+	event.u.data[0] = data0;
+	event.u.data[1] = size;
 
-	/*
-	 * Code could be simplified if ION support of dma_buf_vmap is
-	 * available. This workaround takes the avandaage that ion_alloc
-	 * returns a virtually contiguous memory region, so we just need
-	 * to _kmap each individual page and then only use the virtual
-	 * address returned from the first call to _kmap.
-	 */
-	for (i = 0; i < PAGE_ALIGN(dmabuf->size) / PAGE_SIZE; i++) {
-		addr = dma_buf_kmap(dmabuf, i);
-		if (addr == NULL) {
-			pr_err("kernel map fail\n");
-			for (j = 0; j < i; j++)
-				dma_buf_kunmap(dmabuf,
-					j,
-					(void *)(*vaddr + (j * PAGE_SIZE)));
-			*vaddr = 0;
-			*len = 0;
-			rc = -ENOSPC;
-			goto fail;
+	if (size == 0) {
+		v4l2_event_queue(vdev, &event);
+		pr_debug("send v4l2 event for ais_v4l2loopback :%d\n",
+			cmd);
+	} else if (size <= MAX_AIS_V4L2_PARAM_EVNET_SIZE) {
+		if (copy_from_user(&event.u.data[2],
+					u64_to_user_ptr(payload),
+					size)) {
+			pr_err("fail to copy from user when send v4l2");
+		} else {
+			v4l2_event_queue(vdev, &event);
+			pr_debug("send v4l2 event for ais_v4l2loopback :%d\n",
+				cmd);
 		}
-		if (i == 0)
-			*vaddr = (uint64_t)addr;
+	} else {
+		v4l2_event_queue(vdev, &event);
 	}
-
-	*len = dmabuf->size;
-
-	return 0;
-
-fail:
-	dma_buf_end_cpu_access(dmabuf, DMA_BIDIRECTIONAL);
-	return rc;
-}
-
-static int cam_mem_util_unmap_cpu_va(struct dma_buf *dmabuf,
-	uint64_t vaddr)
-{
-	int i, rc = 0, page_num;
-
-	if (!dmabuf || !vaddr) {
-		pr_err("Invalid input args %pK %llX\n", dmabuf, vaddr);
-		return -EINVAL;
-	}
-
-	page_num = PAGE_ALIGN(dmabuf->size) / PAGE_SIZE;
-
-	for (i = 0; i < page_num; i++) {
-		dma_buf_kunmap(dmabuf, i,
-			(void *)(vaddr + (i * PAGE_SIZE)));
-	}
-
-	/*
-	 * dma_buf_begin_cpu_access() and
-	 * dma_buf_end_cpu_access() need to be called in pair
-	 * to avoid stability issue.
-	 */
-	rc = dma_buf_end_cpu_access(dmabuf, DMA_BIDIRECTIONAL);
-	if (rc) {
-		pr_err("Failed in end cpu access, dmabuf=%pK\n",
-			dmabuf);
-		return rc;
-	}
-
-	return rc;
 }
 
 static const struct v4l2l_format *format_by_fourcc(int fourcc)
@@ -635,7 +638,7 @@ static ssize_t attr_show_format(struct device *cd,
 	const struct v4l2_fract *tpf;
 	char buf4cc[5], buf_fps[32];
 
-	if (!dev || !dev->ready_for_capture)
+	if (!dev || !(dev->state & V4L2L_READY_FOR_CAPTURE))
 		return 0;
 	tpf = &dev->capture_param.timeperframe;
 
@@ -863,9 +866,7 @@ static int vidioc_querycap(struct file *file, void *priv,
 			video_get_drvdata(dev->vdev))->devicenr;
 
 	strlcpy(cap->driver, "v4l2 loopback", sizeof(cap->driver));
-
 	vidioc_fill_name(cap->card, sizeof(cap->card), devnr);
-
 	snprintf(cap->bus_info, sizeof(cap->bus_info),
 			"platform:v4l2loopback-%03d", devnr);
 
@@ -883,9 +884,9 @@ static int vidioc_querycap(struct file *file, void *priv,
 			V4L2_CAP_VIDEO_OUTPUT;
 	} else {
 
-		if (dev->ready_for_capture)
+		if (dev->state & V4L2L_READY_FOR_CAPTURE)
 			cap->capabilities |= V4L2_CAP_VIDEO_CAPTURE;
-		if (dev->ready_for_output)
+		if (dev->state & V4L2L_READY_FOR_OUTPUT)
 			cap->capabilities |= V4L2_CAP_VIDEO_OUTPUT;
 	}
 	cap->device_caps = (cap->capabilities & ~V4L2_CAP_DEVICE_CAPS);
@@ -893,6 +894,7 @@ static int vidioc_querycap(struct file *file, void *priv,
 	cap->capabilities |= V4L2_CAP_DEVICE_CAPS;
 
 	memset(cap->reserved, 0, sizeof(cap->reserved));
+
 	return 0;
 }
 
@@ -911,7 +913,7 @@ static int vidioc_enum_framesizes(struct file *file, void *fh,
 		return -EINVAL;
 
 	dev = v4l2loopback_getdevice(file);
-	if (dev->ready_for_capture) {
+	if (dev->state & V4L2L_READY_FOR_CAPTURE) {
 		/* format has already been negotiated
 		 * cannot change during runtime
 		 */
@@ -945,7 +947,7 @@ static int vidioc_enum_frameintervals(struct file *file, void *fh,
 	struct v4l2_loopback_device *dev = v4l2loopback_getdevice(file);
 	struct v4l2_loopback_opener *opener = fh_to_opener(fh);
 
-	if (dev->ready_for_capture) {
+	if (dev->state & V4L2L_READY_FOR_CAPTURE) {
 		if (opener->vidioc_enum_frameintervals_calls > 0)
 			return -EINVAL;
 		if (argp->width == dev->pix_format.width &&
@@ -977,7 +979,7 @@ static int vidioc_enum_fmt_cap(struct file *file, void *fh,
 
 	if (f->index)
 		return -EINVAL;
-	if (dev->ready_for_capture) {
+	if (dev->state & V4L2L_READY_FOR_CAPTURE) {
 		const __u32 format = dev->pix_format.pixelformat;
 
 		snprintf(f->description, sizeof(f->description),
@@ -1008,7 +1010,7 @@ static int vidioc_g_fmt_cap(struct file *file, void *priv,
 	MARK();
 	dev = v4l2loopback_getdevice(file);
 
-	if (!dev->ready_for_capture)
+	if (!(dev->state & V4L2L_READY_FOR_CAPTURE))
 		return -EINVAL;
 
 	fmt->fmt.pix = dev->pix_format;
@@ -1031,7 +1033,7 @@ static int vidioc_try_fmt_cap(struct file *file, void *priv,
 
 	dev = v4l2loopback_getdevice(file);
 
-	if (dev->ready_for_capture == 0) {
+	if (!(dev->state & V4L2L_READY_FOR_CAPTURE)) {
 		pr_err("setting fmt_cap not possible yet\n");
 		return -EBUSY;
 	}
@@ -1076,7 +1078,7 @@ static int vidioc_enum_fmt_out(struct file *file, void *fh,
 
 	dev = v4l2loopback_getdevice(file);
 
-	if (dev->ready_for_capture) {
+	if (dev->state & V4L2L_READY_FOR_CAPTURE) {
 		const __u32 format = dev->pix_format.pixelformat;
 
 		/* format has been fixed by the writer,
@@ -1156,18 +1158,10 @@ static int vidioc_try_fmt_out(struct file *file, void *priv,
 	MARK();
 	dev = v4l2loopback_getdevice(file);
 
-	/*
-	 * TODO
-	 * only WRITER can set output fmt,
-	 * for READER, can't do this operation, need refine
-	 * WRITER can't support various fmt
-	 */
 	/* TODO(vasaka) loopback does not care about formats writer want to set,
 	 * maybe it is a good idea to restrict format somehow
 	 */
-	if (dev->ready_for_capture)
-		fmt->fmt.pix = dev->pix_format;
-	else {
+	if (dev->state == V4L2L_READY_FOR_CAPTURE) {
 		__u32 w = fmt->fmt.pix.width;
 		__u32 h = fmt->fmt.pix.height;
 		__u32 pixfmt = fmt->fmt.pix.pixelformat;
@@ -1213,27 +1207,30 @@ static int vidioc_s_fmt_out(struct file *file, void *priv,
 {
 	struct v4l2_loopback_device *dev;
 	char buf[5];
-	int ret;
+	int ret = 0;
 
 	MARK();
 	dev = v4l2loopback_getdevice(file);
-	ret = vidioc_try_fmt_out(file, priv, fmt);
 
-	pr_debug("s_fmt_out(%d) %d...%d\n", ret, dev->ready_for_capture,
+	if (dev->state == V4L2L_READY_FOR_CAPTURE) {
+		ret = vidioc_try_fmt_out(file, priv, fmt);
+
+		pr_info("s_fmt_out(%d) %d...%d\n", ret,
+			(dev->state & V4L2L_READY_FOR_CAPTURE),
 			dev->pix_format.sizeimage);
 
-	buf[4] = 0;
-	pr_debug("outFOURCC=%s\n", fourcc2str(dev->pix_format.pixelformat,
-				buf));
+		buf[4] = 0;
+		pr_debug("outFOURCC=%s\n",
+			fourcc2str(dev->pix_format.pixelformat, buf));
 
-	if (ret < 0)
-		return ret;
+		if (ret < 0)
+			return ret;
 
-	if (!dev->ready_for_capture) {
 		dev->buffer_size = PAGE_ALIGN(dev->pix_format.sizeimage);
 		fmt->fmt.pix.sizeimage = dev->buffer_size;
-		dev->ready_for_capture = 1;
+		pr_info("buffer size %u\n", dev->buffer_size);
 	}
+
 	return ret;
 }
 
@@ -1253,37 +1250,6 @@ static int v4l2_loopback_cropcap(struct v4l2_loopback_device *dev,
 	cropcap->pixelaspect = (struct v4l2_fract){1, 1};
 	cropcap->type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
 	return 0;
-}
-
-/* wrapper function with the necessary arguments for struct v4l2_ioctl_ops
- */
-static int vidioc_cropcap(struct file *file, void *priv,
-		struct v4l2_cropcap *cropcap)
-{
-	struct v4l2_loopback_device *dev;
-
-	MARK();
-	dev = v4l2loopback_getdevice(file);
-
-	return v4l2_loopback_cropcap(dev, cropcap);
-}
-
-/* return the currently set dimensions for cropping
- */
-static int vidioc_g_crop(struct file *file, void *priv, struct v4l2_crop *crop)
-{
-	struct v4l2_loopback_device *dev;
-	int ret = 0;
-
-	MARK();
-	if (crop != NULL) {
-		dev = v4l2loopback_getdevice(file);
-		crop->c = dev->frame_crop.c;
-		crop->type = dev->frame_crop.type;
-	} else {
-		ret = -EINVAL;
-	}
-	return ret;
 }
 
 /* set new dimensions for cropping and limit them to acceptable values
@@ -1335,19 +1301,6 @@ static int v4l2_loopback_s_crop(struct v4l2_loopback_device *dev,
 		ret = -EINVAL;
 	}
 	return ret;
-}
-
-/* wrapper function with the necessary arguments for struct v4l2_ioctl_ops
- */
-static int vidioc_s_crop(struct file *file, void *priv,
-		const struct v4l2_crop *crop)
-{
-	struct v4l2_loopback_device *dev;
-
-	MARK();
-	dev = v4l2loopback_getdevice(file);
-
-	return v4l2_loopback_s_crop(dev, crop, true);
 }
 
 /*#define V4L2L_OVERLAY*/
@@ -1535,6 +1488,20 @@ static int v4l2loopback_s_ctrl(struct v4l2_ctrl *ctrl)
 	return v4l2loopback_set_ctrl(dev, ctrl->id, ctrl->val);
 }
 
+int v4l2loopback_g_ctrl(struct v4l2_ctrl *ctrl)
+{
+	switch(ctrl->id) {
+	case V4L2_CID_MIN_BUFFERS_FOR_CAPTURE:
+		ctrl->val = 4;
+		pr_info("min_buffers is 4\n");
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int v4l2loopback_datasize_g_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct v4l2_loopback_device *dev = container_of(ctrl->handler,
@@ -1563,7 +1530,7 @@ static int vidioc_enum_output(struct file *file, void *fh,
 	struct v4l2_loopback_device *dev = v4l2loopback_getdevice(file);
 
 	MARK();
-	if (!dev->announce_all_caps && !dev->ready_for_output)
+	if (!dev->announce_all_caps && dev->state != V4L2L_READY_FOR_OUTPUT)
 		return -ENOTTY;
 
 	if (index != 0)
@@ -1594,7 +1561,7 @@ static int vidioc_g_output(struct file *file, void *fh, unsigned int *i)
 {
 	struct v4l2_loopback_device *dev = v4l2loopback_getdevice(file);
 
-	if (!dev->announce_all_caps && !dev->ready_for_output)
+	if (!dev->announce_all_caps && dev->state != V4L2L_READY_FOR_OUTPUT)
 		return -ENOTTY;
 	if (i)
 		*i = 0;
@@ -1608,7 +1575,7 @@ static int vidioc_s_output(struct file *file, void *fh, unsigned int i)
 {
 	struct v4l2_loopback_device *dev = v4l2loopback_getdevice(file);
 
-	if (!dev->announce_all_caps && !dev->ready_for_output)
+	if (!dev->announce_all_caps && dev->state != V4L2L_READY_FOR_OUTPUT)
 		return -ENOTTY;
 
 	if (i)
@@ -1657,7 +1624,7 @@ static int vidioc_g_input(struct file *file, void *fh, unsigned int *i)
 {
 	struct v4l2_loopback_device *dev = v4l2loopback_getdevice(file);
 
-	if (!dev->announce_all_caps && !dev->ready_for_capture)
+	if (!dev->announce_all_caps && !(dev->state & V4L2L_READY_FOR_CAPTURE))
 		return -ENOTTY;
 	if (i)
 		*i = 0;
@@ -1671,7 +1638,7 @@ static int vidioc_s_input(struct file *file, void *fh, unsigned int i)
 {
 	struct v4l2_loopback_device *dev = v4l2loopback_getdevice(file);
 
-	if (!dev->announce_all_caps && !dev->ready_for_capture)
+	if (!dev->announce_all_caps && !(dev->state & V4L2L_READY_FOR_CAPTURE))
 		return -ENOTTY;
 	if (i == 0)
 		return 0;
@@ -1689,7 +1656,6 @@ static int vidioc_reqbufs(struct file *file, void *fh,
 {
 	struct v4l2_loopback_device *dev;
 	struct v4l2_loopback_opener *opener;
-	int i;
 
 	MARK();
 	dev = v4l2loopback_getdevice(file);
@@ -1698,6 +1664,9 @@ static int vidioc_reqbufs(struct file *file, void *fh,
 	/* release buffer when request buffer 0*/
 	if (b->count == 0) {
 		free_buffers(dev);
+		send_v4l2_event_ex(dev->vdev, AIS_V4L2_CLIENT_OUTPUT,
+			AIS_V4L2_ALLOC_BUFS, 0);
+		dev->used_buffers = 0;
 		return 0;
 	}
 
@@ -1720,46 +1689,8 @@ static int vidioc_reqbufs(struct file *file, void *fh,
 		if (b->count > dev->buffers_number)
 			b->count = dev->buffers_number;
 
-		/* make sure that outbufs_list contains buffers
-		 * from 0 to used_buffers-1 actually, it will have been
-		 * already populated via v4l2_loopback_init()
-		 * at this point
-		 */
-		if (list_empty(&dev->outbufs_list)) {
-			for (i = 0; i < dev->used_buffers; ++i)
-				list_add_tail(&dev->buffers[i].list_head,
-						&dev->outbufs_list);
-		}
+		dev->used_buffers = b->count;
 
-		/* also, if dev->used_buffers is going to be decreased,
-		 * we should remove out-of-range buffers from outbufs_list,
-		 * and fix bufpos2index mapping
-		 */
-		if (b->count < dev->used_buffers) {
-			struct v4l2l_buffer *pos, *n;
-
-			list_for_each_entry_safe(pos, n,
-					&dev->outbufs_list, list_head) {
-				if (pos->buffer.index >= b->count)
-					list_del(&pos->list_head);
-			}
-
-			/* after we update dev->used_buffers, buffers
-			 * in outbufs_list will correspond to
-			 * dev->write_position + [0;b->count-1] range
-			 */
-			i = dev->write_position;
-			list_for_each_entry(pos,
-					&dev->outbufs_list, list_head) {
-				dev->bufpos2index[i % b->count] =
-					pos->buffer.index;
-				++i;
-			}
-		}
-
-		opener->buffers_number = b->count;
-		if (opener->buffers_number < dev->used_buffers)
-			dev->used_buffers = opener->buffers_number;
 		return 0;
 	default:
 		return -EINVAL;
@@ -1801,6 +1732,7 @@ static int vidioc_querybuf(struct file *file, void *fh, struct v4l2_buffer *b)
 	b->index = index;
 	pr_debug("buffer type: %d (of %d with size=%ld)\n",
 			b->memory, dev->buffers_number, dev->buffer_size);
+	pr_info ("buffer %d %u\n", b->index, b->length);
 
 	/*  Hopefully fix 'DQBUF return bad index if queue bigger
 	 *  then 2 for capture'
@@ -1816,46 +1748,61 @@ static int vidioc_expbuf(struct file *file, void *fh,
 			struct v4l2_exportbuffer *e)
 {
 	struct v4l2_loopback_device *dev;
-	int fd;
-	struct dma_buf *dmabuf = NULL;
+	int fd = 0;
 	int rc;
-	size_t size;
+	struct dma_buf *dmabuf = NULL;
 
 	MARK();
 
 	dev = v4l2loopback_getdevice(file);
 
-	if (dev->dmabufs[0] == NULL) {
-		dev->io_mode = V4L2L_IO_MODE_DMABUF;
-		rc = allocate_dma_buffers(dev);
-		if (rc < 0) {
-			pr_err("fail to allocate dma buffers");
+	if (e->index == -1U) {
+		pr_info("support DMABUF\n");
+		return 0;
+	}
+
+	if (e->index >= dev->used_buffers) {
+		pr_warn("invalid index %d", e->index);
+		return -EINVAL;
+	}
+
+	switch (e->type) {
+	case V4L2_BUF_TYPE_VIDEO_CAPTURE: {
+		pr_info("export buffer %d\n", e->index);
+		if (dev->dmabufs[0] == NULL ||
+			dev->dmabufs[e->index] == NULL) {
+			dev->io_mode = V4L2L_IO_MODE_DMABUF;
+
+			rc = allocate_dma_buffers(dev);
+			if (rc) {
+				pr_err("fail to allocate dma buffers\n");
+				return -EINVAL;
+			}
+		}
+
+		fd = dma_buf_fd(dev->dmabufs[e->index], O_CLOEXEC);
+		if (fd < 0) {
+			pr_err("dma get fd fail, *fd=%d\n", fd);
 			return -EINVAL;
 		}
+
+		/*
+		 * increment the ref count so that ref count becomes 2 here
+		 * when we close fd, refcount becomes 1 and when we do
+		 * dmap_put_buf, ref count becomes 0 and memory will be freed.
+		 */
+		dmabuf = dma_buf_get(fd);
+		if (dmabuf == NULL) {
+			pr_err("dma_buf_get failed, fd=%d\n", fd);
+			return -EINVAL;
+		}
+
+		break;
+	}
+	case V4L2_BUF_TYPE_VIDEO_OUTPUT: {
+		break;
 	}
 
-	fd = dma_buf_fd(dev->dmabufs[e->index], O_CLOEXEC);
-	if (fd < 0) {
-		pr_err("get fd fail, *fd=%d", fd);
-		return -EINVAL;
-	}
-
-	/*
-	 * increment the ref count so that ref count becomes 2 here
-	 * when we close fd, refcount becomes 1 and when we do
-	 * dmap_put_buf, ref count becomes 0 and memory will be freed.
-	 */
-	dmabuf = dma_buf_get(fd);
-	if (dmabuf == NULL) {
-		pr_err("dma_buf_get failed, fd=%d", fd);
-		return -EINVAL;
-	}
-
-	rc = cam_mem_util_map_cpu_va(dev->dmabufs[e->index],
-		&dev->buffers[e->index].kvaddr, &size);
-	if (rc < 0) {
-		pr_err("fail to cam_mem_util_map_cpu_va dma buffer");
-		return -EINVAL;
 	}
 
 	pr_debug("exit %s\n", __func__);
@@ -1864,21 +1811,78 @@ static int vidioc_expbuf(struct file *file, void *fh,
 	return 0;
 }
 
-static void buffer_written(struct v4l2_loopback_device *dev,
-		struct v4l2l_buffer *buf)
+static int can_read(struct v4l2_loopback_device *dev,
+		struct v4l2_loopback_opener *opener)
 {
-	del_timer_sync(&dev->sustain_timer);
-	del_timer_sync(&dev->timeout_timer);
-	spin_lock_bh(&dev->lock);
+	int ret;
 
-	dev->bufpos2index[dev->write_position %
-		dev->used_buffers] = buf->buffer.index;
-	list_move_tail(&buf->list_head, &dev->outbufs_list);
-	++dev->write_position;
-	dev->reread_count = 0;
+	mutex_lock(&dev->capbufs_mutex);
+	ret = !list_empty(&dev->capbufs_list);
+	mutex_unlock(&dev->capbufs_mutex);
 
-	check_timers(dev);
-	spin_unlock_bh(&dev->lock);
+	return ret;
+}
+
+
+static int set_bufstate(struct v4l2_loopback_device *dev,
+	struct v4l2l_buffer* b, enum V4L2_LOOPBACK_BUF_STATE state)
+{
+	int ret = 0;
+
+	mutex_lock(&dev->buf_mutex);
+
+	switch(b->state)
+	{
+	case V4L2L_BUF_PROXY_ACQUIRED:
+		if (state == V4L2L_BUF_DONE_Q)
+			b->state = state;
+		else
+			ret = -1;
+		break;
+	case V4L2L_BUF_DONE_Q:
+		if (state == V4L2L_BUF_USER_ACQUIRED)
+			b->state = state;
+		else
+			ret = -1;
+		break;
+	case V4L2L_BUF_READY_Q:
+		if (state == V4L2L_BUF_PROXY_ACQUIRED)
+			b->state = state;
+		else
+			ret = -1;
+		break;
+	case V4L2L_BUF_USER_ACQUIRED:
+		if (state == V4L2L_BUF_READY_Q)
+			b->state = state;
+		else
+			ret = -1;
+		break;
+	case V4L2L_BUF_PENDING:
+		ret = -1;
+		break;
+	}
+
+	if (ret == -1) {
+		pr_err("[dev %s] fail to set buffer state %u current state %u\n",
+			dev->vdev->name, state, b->state);
+	}
+
+	mutex_unlock(&dev->buf_mutex);
+
+	return ret;
+}
+
+static void set_allbufs_state(struct v4l2_loopback_device *dev,
+	enum V4L2_LOOPBACK_BUF_STATE state)
+{
+	int i = 0;
+
+	mutex_lock(&dev->buf_mutex);
+	for (i = 0; i < dev->buffers_number; ++i) {
+		dev->buffers[i].state = state;
+	}
+
+	mutex_unlock(&dev->buf_mutex);
 }
 
 /* put buffer to queue
@@ -1891,6 +1895,7 @@ static int vidioc_qbuf(struct file *file,
 	struct v4l2_loopback_opener *opener;
 	struct v4l2l_buffer *b;
 	int index;
+	int rc;
 
 	dev = v4l2loopback_getdevice(file);
 	opener = fh_to_opener(private_data);
@@ -1905,90 +1910,42 @@ static int vidioc_qbuf(struct file *file,
 
 	switch (buf->type) {
 	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
-		pr_debug("capture QBUF index: %d\n", index);
-		set_queued(b);
-		return 0;
+		pr_debug("[dev %s] capture QBUF index: %d\n", dev->vdev->name, index);
+
+		rc = set_bufstate(dev, b, V4L2L_BUF_READY_Q);
+		if (rc < 0)
+			pr_err("[dev %s] capture QBUF index: %d fail\n", dev->vdev->name, b->buffer.index);
+		else {
+			mutex_lock(&dev->outbufs_mutex);
+			list_add_tail(&b->list_head, &dev->outbufs_list);
+			mutex_unlock(&dev->outbufs_mutex);
+			send_v4l2_event(dev->vdev, AIS_V4L2_CLIENT_OUTPUT,
+				AIS_V4L2_OUTPUT_BUF_READY);
+		}
+		return rc;
 	case V4L2_BUF_TYPE_VIDEO_OUTPUT:
-		pr_debug("output QBUF pos: %d index: %d\n",
-				dev->write_position, index);
+		pr_debug("[dev %s] output QBUF pos: %d index: %d\n",
+				dev->vdev->name, dev->write_position, index);
 		if (buf->timestamp.tv_sec == 0 && buf->timestamp.tv_usec == 0)
-			do_gettimeofday(&b->buffer.timestamp);
+			cam_common_util_get_curr_timestamp(&b->buffer.timestamp);
 		else
 			b->buffer.timestamp = buf->timestamp;
-		b->buffer.bytesused = buf->bytesused;
-		set_done(b);
-		buffer_written(dev, b);
 
-		/*  Hopefully fix 'DQBUF return bad index if queue
-		 *  bigger then 2 for capture'
-		 *  https://github.com/umlaeute/v4l2loopback/issues/60
-		 */
-		buf->flags &= ~V4L2_BUF_FLAG_DONE;
-		buf->flags |= V4L2_BUF_FLAG_QUEUED;
-
-		wake_up_all(&dev->read_event);
-		return 0;
+		b->buffer.sequence = buf->sequence;
+		rc = set_bufstate(dev, b, V4L2L_BUF_DONE_Q);
+		if (rc < 0)
+			pr_err("[dev %s] output QBUF index: %d fail\n", dev->vdev->name, b->buffer.index);
+		else {
+			mutex_lock(&dev->capbufs_mutex);
+			list_add_tail(&b->list_head, &dev->capbufs_list);
+			mutex_unlock(&dev->capbufs_mutex);
+			wake_up_all(&dev->read_event);
+		}
+		return rc;
 	default:
+		pr_err("unsupported buf type %d\n", buf->type);
 		return -EINVAL;
 	}
-}
-
-static int can_read(struct v4l2_loopback_device *dev,
-		struct v4l2_loopback_opener *opener)
-{
-	int ret;
-
-	spin_lock_bh(&dev->lock);
-	check_timers(dev);
-	ret = dev->write_position > opener->read_position
-		|| dev->reread_count > opener->reread_count
-		|| dev->timeout_happened;
-	spin_unlock_bh(&dev->lock);
-	return ret;
-}
-
-static int get_capture_buffer(struct file *file)
-{
-	struct v4l2_loopback_device *dev = v4l2loopback_getdevice(file);
-	struct v4l2_loopback_opener *opener = fh_to_opener(file->private_data);
-	int pos, ret;
-	int timeout_happened;
-
-	if ((file->f_flags & O_NONBLOCK) &&
-		(dev->write_position <= opener->read_position &&
-		dev->reread_count <= opener->reread_count
-		&& !dev->timeout_happened))
-		return -EAGAIN;
-	wait_event_interruptible(dev->read_event, can_read(dev, opener));
-
-	spin_lock_bh(&dev->lock);
-	if (dev->write_position == opener->read_position) {
-		if (dev->reread_count > opener->reread_count + 2)
-			opener->reread_count = dev->reread_count - 1;
-		++opener->reread_count;
-		pos = (opener->read_position +
-				dev->used_buffers - 1) % dev->used_buffers;
-	} else {
-		opener->reread_count = 0;
-		if (dev->write_position > opener->read_position + 2)
-			opener->read_position = dev->write_position - 1;
-		pos = opener->read_position % dev->used_buffers;
-		++opener->read_position;
-	}
-	timeout_happened = dev->timeout_happened;
-	dev->timeout_happened = 0;
-	spin_unlock_bh(&dev->lock);
-
-	ret = dev->bufpos2index[pos];
-	if (timeout_happened) {
-		/* although allocated on-demand, timeout_image is freed only
-		 * in free_buffers(), so we don't need to worry about it being
-		 * deallocated suddenly
-		 */
-		memcpy(dev->image + dev->buffers[ret].buffer.m.offset,
-		       dev->timeout_image, dev->buffer_size);
-	}
-	return ret;
 }
 
 /* put buffer to dequeue
@@ -1999,8 +1956,8 @@ static int vidioc_dqbuf(struct file *file,
 {
 	struct v4l2_loopback_device *dev;
 	struct v4l2_loopback_opener *opener;
-	int index;
 	struct v4l2l_buffer *b;
+	int rc = 0;
 
 	dev = v4l2loopback_getdevice(file);
 	opener = fh_to_opener(private_data);
@@ -2011,26 +1968,64 @@ static int vidioc_dqbuf(struct file *file,
 
 	switch (buf->type) {
 	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
-		index = get_capture_buffer(file);
-		if (index < 0)
-			return index;
-		pr_debug("capture DQBUF pos: %d index: %d\n",
-				opener->read_position - 1, index);
-		if (!(dev->buffers[index].buffer.flags&V4L2_BUF_FLAG_MAPPED))
-			pr_debug("trying to ret not mapped buf[%d]\n", index);
-		unset_flags(&dev->buffers[index]);
-		*buf = dev->buffers[index].buffer;
-		return 0;
+		mutex_lock(&dev->capbufs_mutex);
+		if (!list_empty(&dev->capbufs_list)) {
+
+			b = list_entry(dev->capbufs_list.prev,
+						struct v4l2l_buffer, list_head);
+
+			rc = set_bufstate(dev, b, V4L2L_BUF_USER_ACQUIRED);
+			if (rc < 0) {
+				mutex_unlock(&dev->capbufs_mutex);
+				pr_err("[dev %s] capture DQBUF index: %d fail\n", dev->vdev->name, b->buffer.index);
+			} else {
+				list_del_init(&b->list_head);
+				mutex_unlock(&dev->capbufs_mutex);
+
+				pr_debug("[dev %s] capture DQBUF index: %d\n", dev->vdev->name, b->buffer.index);
+				*buf = b->buffer;
+			}
+		} else {
+			mutex_unlock(&dev->capbufs_mutex);
+
+			pr_warn("[dev %s] capture list is empty\n", dev->vdev->name);
+			if (file->f_flags & O_NONBLOCK) {
+				return -EAGAIN;
+			}
+
+			wait_event_interruptible(dev->read_event, can_read(dev, opener));
+		}
+
+		return rc;
 	case V4L2_BUF_TYPE_VIDEO_OUTPUT:
-		b = list_entry(dev->outbufs_list.prev,
-				struct v4l2l_buffer, list_head);
-		list_move_tail(&b->list_head, &dev->outbufs_list);
-		pr_debug("output DQBUF index: %d\n", b->buffer.index);
-		unset_flags(b);
-		*buf = b->buffer;
-		buf->type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-		return 0;
+		mutex_lock(&dev->outbufs_mutex);
+		if (!list_empty(&dev->outbufs_list)) {
+
+			b = list_entry(dev->outbufs_list.prev,
+					struct v4l2l_buffer, list_head);
+
+			rc = set_bufstate(dev, b, V4L2L_BUF_PROXY_ACQUIRED);
+			if (rc < 0) {
+				mutex_unlock(&dev->outbufs_mutex);
+				pr_err("[dev %s] output DQBUF index: %d fail\n", dev->vdev->name, b->buffer.index);
+			}
+			else {
+				list_del_init(&b->list_head);
+				pr_debug("[dev %s] output DQBUF index: %d\n", dev->vdev->name, b->buffer.index);
+				mutex_unlock(&dev->outbufs_mutex);
+
+				*buf = b->buffer;
+				buf->type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
+			}
+		} else {
+			mutex_unlock(&dev->outbufs_mutex);
+			pr_warn("[dev %s] output list is empty\n", dev->vdev->name);
+			// for proxy, must use NONBLOCK method
+			return -EAGAIN;
+		}
+		return rc;
 	default:
+		pr_err("[dev %s] unsupported buf type %d\n", dev->vdev->name, buf->type);
 		return -EINVAL;
 	}
 }
@@ -2045,7 +2040,8 @@ static int vidioc_streamon(struct file *file,
 {
 	struct v4l2_loopback_device *dev;
 	struct v4l2_loopback_opener *opener;
-	int ret;
+	struct v4l2l_buffer *pos, *n;
+	int rc = 0;
 
 	MARK();
 	dev = v4l2loopback_getdevice(file);
@@ -2053,26 +2049,37 @@ static int vidioc_streamon(struct file *file,
 
 	switch (type) {
 	case V4L2_BUF_TYPE_VIDEO_OUTPUT:
-		/* TODO: need to investigate when allocate buffer
-		 * and set ready_for_capture=1 is more proper
-		 */
-		opener->type = WRITER;
-		dev->ready_for_output = 0;
-		if (!dev->ready_for_capture) {
-			ret = allocate_buffers(dev);
-			if (ret < 0)
-				return ret;
-			dev->ready_for_capture = 1;
-		}
 		return 0;
-	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
-		opener->type = READER;
-		if (!dev->ready_for_capture)
-			return -EIO;
+	case V4L2_BUF_TYPE_VIDEO_CAPTURE: {
+		set_allbufs_state(dev, V4L2L_BUF_PROXY_ACQUIRED);
+		mutex_lock(&dev->outbufs_mutex);
+		list_for_each_entry_safe(pos, n,
+			&dev->outbufs_list, list_head) {
+			list_del_init(&pos->list_head);
+		}
+		INIT_LIST_HEAD(&dev->outbufs_list);
+		mutex_unlock(&dev->outbufs_mutex);
+
+		mutex_lock(&dev->capbufs_mutex);
+		list_for_each_entry_safe(pos, n,
+			&dev->capbufs_list, list_head) {
+			list_del_init(&pos->list_head);
+		}
+		INIT_LIST_HEAD(&dev->capbufs_list);
+		mutex_unlock(&dev->capbufs_mutex);
 
 		send_v4l2_event(dev->vdev, AIS_V4L2_CLIENT_OUTPUT,
 			AIS_V4L2_START_INPUT);
-		return 0;
+		rc = wait_for_completion_timeout(&dev->ctrl_complete,
+					msecs_to_jiffies(START_TIMEOUT));
+		if (rc) {
+			rc = dev->qcarcam_ctrl_ret;
+		} else {
+			pr_err("streamon fail, timeout %d\n", rc);
+			rc = -ETIMEDOUT;
+		}
+		return rc;
+	}
 	default:
 		return -EINVAL;
 	}
@@ -2085,16 +2092,48 @@ static int vidioc_streamoff(struct file *file,
 		void *private_data, enum v4l2_buf_type type)
 {
 	struct v4l2_loopback_device *dev;
+	struct v4l2l_buffer *pos, *n;
+	int rc = 0;
 
 	dev = v4l2loopback_getdevice(file);
 
 	switch (type) {
 	case V4L2_BUF_TYPE_VIDEO_OUTPUT:
-		if (dev->ready_for_capture > 0)
-			dev->ready_for_capture--;
 		return 0;
 	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
-		return 0;
+		set_allbufs_state(dev, V4L2L_BUF_PENDING);
+
+		send_v4l2_event(dev->vdev, AIS_V4L2_CLIENT_OUTPUT,
+			AIS_V4L2_STOP_INPUT);
+		rc = wait_for_completion_timeout(&dev->ctrl_complete,
+					msecs_to_jiffies(STOP_TIMEOUT));
+		if (rc) {
+			rc = dev->qcarcam_ctrl_ret;
+			pr_info("clear list when streamoff\n");
+			mutex_lock(&dev->outbufs_mutex);
+			list_for_each_entry_safe(pos, n,
+				&dev->outbufs_list, list_head) {
+				list_del_init(&pos->list_head);
+			}
+			INIT_LIST_HEAD(&dev->outbufs_list);
+			mutex_unlock(&dev->outbufs_mutex);
+
+			mutex_lock(&dev->capbufs_mutex);
+			list_for_each_entry_safe(pos, n,
+				&dev->capbufs_list, list_head) {
+				list_del_init(&pos->list_head);
+			}
+			INIT_LIST_HEAD(&dev->capbufs_list);
+			mutex_unlock(&dev->capbufs_mutex);
+
+		} else {
+			pr_err("streamoff fail, timeout %d\n", rc);
+			rc = -ETIMEDOUT;
+		}
+
+
+
+		return rc;
 	default:
 		return -EINVAL;
 	}
@@ -2137,7 +2176,7 @@ static int process_capture_cmd(struct v4l2_loopback_device *dev,
 	case AIS_V4L2_CAPTURE_PRIV_SET_PARAM: {
 		if (kcmd->size > MAX_AIS_V4L2_PAYLOAD_SIZE) {
 			rc = -EINVAL;
-		} else if (kcmd->payload == NULL) {
+		} else if (u64_to_user_ptr(kcmd->payload) == NULL) {
 			rc = -EINVAL;
 			pr_err("payload is NULL on set param\n");
 		} else if (copy_from_user(dev->qcarcam_param,
@@ -2146,9 +2185,10 @@ static int process_capture_cmd(struct v4l2_loopback_device *dev,
 			rc = -EFAULT;
 			pr_err("copy_from_user fail on set param\n");
 		} else {
+			pr_info("s_param %u\n", kcmd->param_type);
+
 			dev->qcarcam_param_size = kcmd->size;
 			dev->qcarcam_code = kcmd->param_type;
-			pr_debug("s_param %u\n", kcmd->param_type);
 
 			send_v4l2_event_ex(dev->vdev, AIS_V4L2_CLIENT_OUTPUT,
 				AIS_V4L2_SET_PARAM, kcmd->param_type);
@@ -2166,38 +2206,58 @@ static int process_capture_cmd(struct v4l2_loopback_device *dev,
 		break;
 	}
 	case AIS_V4L2_CAPTURE_PRIV_GET_PARAM: {
-
-		/* send get_param to output end and wait */
-		pr_info("g_param param_type %d\n", kcmd->param_type);
-		send_v4l2_event_ex(dev->vdev, AIS_V4L2_CLIENT_OUTPUT,
-			AIS_V4L2_GET_PARAM, kcmd->param_type);
-		/* wait for the signal */
-		rc = wait_for_completion_timeout(&dev->gparam_complete,
-			msecs_to_jiffies(GPARAM_TIMEOUT));
-		if (rc) {
-			rc = 0;
-		} else {
-			pr_err("g_param fail, timeout %d\n", rc);
-			rc = -ETIMEDOUT;
-			return rc;
-		}
-
-		if (dev->qcarcam_param_size == 0) {
-			/* g_param fail */
+		if (kcmd->size > MAX_AIS_V4L2_PAYLOAD_SIZE) {
 			rc = -EINVAL;
-			pr_err("get param size is 0\n");
-		} else if (kcmd->payload == NULL) {
+		} else if (u64_to_user_ptr(kcmd->payload) == NULL) {
 			rc = -EINVAL;
-			pr_err("payload is NULL on get param\n");
-		} else if (copy_to_user(u64_to_user_ptr(kcmd->payload),
-					dev->qcarcam_param,
-					dev->qcarcam_param_size)) {
-			/* copy the param from kernel */
-			rc = -EFAULT;
-			pr_err("copy_from_user fail on get param\n");
+			pr_err("payload is NULL on set param\n");
 		} else {
-			kcmd->size = dev->qcarcam_param_size;
-			kcmd->param_type = dev->qcarcam_code;
+			pr_info("get_param %u\n", kcmd->param_type);
+
+			/* send the payload to userspace by v4l2_event
+			 * when payload size is large, can't send by v4l2 */
+			if (kcmd->size > MAX_AIS_V4L2_PARAM_EVNET_SIZE &&
+				copy_from_user(dev->qcarcam_param,
+				u64_to_user_ptr(kcmd->payload),
+				kcmd->size)) {
+				rc = -EFAULT;
+				pr_err("copy_from_user fail on get param\n");
+				return rc;
+			}
+
+			dev->qcarcam_param_size = kcmd->size;
+			dev->qcarcam_code = kcmd->param_type;
+
+			/* send get_param to output end */
+			send_v4l2_event_ex2(dev->vdev, AIS_V4L2_CLIENT_OUTPUT,
+				AIS_V4L2_GET_PARAM, kcmd->param_type, kcmd->size, kcmd->payload);
+
+			/* wait for the signal */
+			rc = wait_for_completion_timeout(&dev->gparam_complete,
+				msecs_to_jiffies(GPARAM_TIMEOUT));
+			if (rc) {
+				rc = 0;
+			} else {
+				pr_err("g_param fail, timeout %d\n", rc);
+				rc = -ETIMEDOUT;
+				return rc;
+			}
+
+			if (dev->qcarcam_param_size == 0) {
+				/* g_param fail */
+				rc = -EINVAL;
+				pr_err("get param size is 0\n");
+			} else if (copy_to_user(u64_to_user_ptr(kcmd->payload),
+						dev->qcarcam_param,
+						dev->qcarcam_param_size)) {
+				/* copy the param from kernel */
+				rc = -EFAULT;
+				pr_err("copy_from_user fail on get param\n");
+			} else {
+				kcmd->size = dev->qcarcam_param_size;
+				kcmd->param_type = dev->qcarcam_code;
+				pr_info("succeed to get param\n");
+			}
 		}
 		break;
 	}
@@ -2213,10 +2273,13 @@ static int process_output_cmd(struct v4l2_loopback_device *dev,
 	struct ais_v4l2_control_t *kcmd)
 {
 	int rc = 0;
+	struct v4l2_event event;
+	struct ais_v4l2_buffers_t bufs;
+	struct dma_buf *dmabuf = NULL;
+	uint32_t i;
 
 	switch (kcmd->cmd) {
 	case AIS_V4L2_OUTPUT_PRIV_SET_PARAM_EVENT: {
-		struct v4l2_event event;
 
 		if (kcmd->size > MAX_AIS_V4L2_PARAM_EVNET_SIZE) {
 			rc = -EINVAL;
@@ -2271,6 +2334,45 @@ static int process_output_cmd(struct v4l2_loopback_device *dev,
 			kcmd->param_type = dev->qcarcam_code;
 		}
 		break;
+	case AIS_V4L2_OUTPUT_PRIV_OPEN_RET:
+		dev->qcarcam_ctrl_ret = kcmd->ctrl_ret;
+		complete(&dev->ctrl_complete);
+		break;
+	case AIS_V4L2_OUTPUT_PRIV_START_RET:
+		dev->qcarcam_ctrl_ret = kcmd->ctrl_ret;
+		complete(&dev->ctrl_complete);
+		break;
+	case AIS_V4L2_OUTPUT_PRIV_STOP_RET:
+		dev->qcarcam_ctrl_ret = kcmd->ctrl_ret;
+		complete(&dev->ctrl_complete);
+		break;
+	case AIS_V4L2_OUTPUT_PRIV_SET_BUFS: {
+
+		if (kcmd->size != sizeof(bufs)) {
+			rc = -EINVAL;
+		} else if (copy_from_user(&bufs,
+				u64_to_user_ptr(kcmd->payload),
+				sizeof(bufs))) {
+			rc = -EFAULT;
+			pr_err("fail to AIS_V4L2_OUTPUT_PRIV_SET_BUFS\n");
+		} else {
+			for (i = 0; i < bufs.nbufs; ++i) {
+				dmabuf = dma_buf_get(bufs.fds[i]);
+				if (dmabuf == NULL) {
+					pr_err("dma_buf_get failed, fd=%d\n", bufs.fds[i]);
+					return -EINVAL;
+				}
+
+				dev->dmabufs[i] = dmabuf;
+			}
+
+			dev->allocbufs_ret = kcmd->ctrl_ret;
+			complete(&dev->allocbufs_complete);
+
+			pr_info("setbufs %u\n", bufs.nbufs);
+		}
+		break;
+	}
 	}
 
 	return rc;
@@ -2284,7 +2386,6 @@ static long ais_v4l2loopback_dev_ioctl(struct file *file, void *fh,
 	int32_t rc = 0;
 
 	struct v4l2_loopback_device *dev;
-	struct v4l2_loopback_opener *opener;
 
 	struct ais_v4l2_control_t *kcmd = (struct ais_v4l2_control_t *)arg;
 
@@ -2344,91 +2445,6 @@ static const struct vm_operations_struct vm_ops = {
 	.close = vm_close,
 };
 
-static int v4l2_loopback_mmap(struct file *file, struct vm_area_struct *vma)
-{
-	int i;
-	unsigned long addr;
-	unsigned long start;
-	unsigned long size;
-	struct v4l2_loopback_device *dev;
-	struct v4l2_loopback_opener *opener;
-	struct v4l2l_buffer *buffer = NULL;
-
-	MARK();
-	start = (unsigned long) vma->vm_start;
-	size = (unsigned long) (vma->vm_end - vma->vm_start);
-
-	dev = v4l2loopback_getdevice(file);
-	opener = fh_to_opener(file->private_data);
-
-	if (size > dev->buffer_size) {
-		pr_err("userspace tries to mmap too much, fail\n");
-		return -EINVAL;
-	}
-
-	/* FIXXXXXME: allocation should not happen here!? */
-	if (dev->image == NULL) {
-		dev->io_mode = V4L2L_IO_MODE_MMAP;
-		if (allocate_buffers(dev) < 0)
-			return -EINVAL;
-		/* TODO: refine the state transfer*/
-
-	}
-
-	if (opener->timeout_image_io) {
-		/* we are going to map the timeout_image_buffer */
-		if ((vma->vm_pgoff << PAGE_SHIFT)
-				!= dev->buffer_size * MAX_BUFFERS) {
-			pr_err("invalid mmap offset for timeout_image_io mode\n");
-			return -EINVAL;
-		}
-	} else if ((vma->vm_pgoff << PAGE_SHIFT) >
-			dev->buffer_size * (dev->buffers_number - 1)) {
-		pr_err("userspace tries to mmap too far, fail\n");
-		return -EINVAL;
-	}
-
-	if (opener->timeout_image_io) {
-		buffer = &dev->timeout_image_buffer;
-		addr = (unsigned long)dev->timeout_image;
-	} else {
-		for (i = 0; i < dev->buffers_number; ++i) {
-			buffer = &dev->buffers[i];
-			if ((buffer->buffer.m.offset >> PAGE_SHIFT)
-					== vma->vm_pgoff)
-				break;
-		}
-
-		if (buffer == NULL)
-			return -EINVAL;
-
-		addr = (unsigned long) dev->image +
-			(vma->vm_pgoff << PAGE_SHIFT);
-	}
-
-	while (size > 0) {
-		struct page *page;
-
-		page = (void *)vmalloc_to_page((void *)addr);
-
-		if (vm_insert_page(vma, start, page) < 0)
-			return -EAGAIN;
-
-		start += PAGE_SIZE;
-		addr += PAGE_SIZE;
-		size -= PAGE_SIZE;
-	}
-
-	vma->vm_ops = &vm_ops;
-	vma->vm_private_data = buffer;
-	buffer->buffer.flags |= V4L2_BUF_FLAG_MAPPED;
-
-	vm_open(vma);
-
-	MARK();
-	return 0;
-}
-
 static unsigned int v4l2_loopback_poll(struct file *file,
 						struct poll_table_struct *pts)
 {
@@ -2453,10 +2469,10 @@ static unsigned int v4l2_loopback_poll(struct file *file,
 	}
 
 	switch (opener->type) {
-	case WRITER:
+	case V4L2L_WRITER:
 		ret_mask |= POLLOUT | POLLWRNORM;
 		break;
-	case READER:
+	case V4L2L_READER:
 		if (!can_read(dev, opener)) {
 			if (ret_mask)
 				return ret_mask;
@@ -2484,6 +2500,7 @@ static int v4l2_loopback_open(struct file *file)
 	struct v4l2_loopback_device *dev;
 	struct v4l2_loopback_opener *opener;
 	int rc = 0;
+	enum v4l2_loopback_opener_type etype;
 
 	MARK();
 	dev = v4l2loopback_getdevice(file);
@@ -2495,10 +2512,50 @@ static int v4l2_loopback_open(struct file *file)
 
 	if (dev->open_count.counter >= dev->max_openers)
 		return -EBUSY;
+
+	/* WRITEONLY should be open operation from proxy */
+	if ((file->f_mode & (FMODE_READ | FMODE_WRITE)) == FMODE_WRITE) {
+		if (dev->state == V4L2L_READY_FOR_OUTPUT) {
+			etype = V4L2L_WRITER;
+			dev->state = V4L2L_READY_FOR_CAPTURE;
+		} else {
+			pr_err("invalid open, only proxy can open\n");
+			return -EINVAL;
+		}
+	} else {
+		/* app open it */
+		if (dev->state == V4L2L_READY_FOR_CAPTURE) {
+			etype = V4L2L_READER;
+			send_v4l2_event(dev->vdev, AIS_V4L2_CLIENT_OUTPUT,
+				AIS_V4L2_OPEN_INPUT);
+			rc = wait_for_completion_timeout(&dev->ctrl_complete,
+					msecs_to_jiffies(OPEN_TIMEOUT));
+			if (rc) {
+				rc = dev->qcarcam_ctrl_ret;
+				if (!dev->qcarcam_ctrl_ret) {
+					dev->state = V4L2L_OPENED;
+					pr_info("app open succeed\n");
+				} else {
+					pr_err("app open fail\n");
+					return rc;
+				}
+			} else {
+				pr_err("open fail, timeout %d\n", rc);
+				rc = -ETIMEDOUT;
+				return rc;
+			}
+		} else {
+			pr_err("invalid operation state %d\n", dev->state);
+			return -EINVAL;
+		}
+	}
+
 	/* kfree on close */
 	opener = kzalloc(sizeof(*opener), GFP_KERNEL);
 	if (opener == NULL)
 		return -ENOMEM;
+
+	opener->type = etype;
 
 	v4l2_fh_init(&opener->fh, video_devdata(file));
 	file->private_data = &opener->fh;
@@ -2517,25 +2574,6 @@ static int v4l2_loopback_open(struct file *file)
 	}
 	v4l2_fh_add(&opener->fh);
 
-	/*
-	 * WRITER should open it at first,
-	 * then READER can only open it 1 time,
-	 * if multi READER, some erro will happen
-	 * if multi WRITER, some error also happen
-	 */
-	if (dev->ready_for_output) {
-		opener->type = WRITER;
-		dev->ready_for_output = 0;
-	} else if (dev->ready_for_capture) {
-		opener->type = READER;
-		send_v4l2_event(dev->vdev, AIS_V4L2_CLIENT_OUTPUT,
-			AIS_V4L2_OPEN_INPUT);
-		try_free_buffers(dev);
-	} else {
-		pr_err("Please config output config at first\n");
-		rc = -EINVAL;
-	}
-
 	pr_debug("opened dev:%pK with image:%pK\n",
 			dev, dev ? dev->image : NULL);
 	MARK();
@@ -2552,22 +2590,36 @@ static int v4l2_loopback_close(struct file *file)
 	opener = fh_to_opener(file->private_data);
 	dev    = v4l2loopback_getdevice(file);
 
-	v4l2_fh_del(file->private_data);
-	v4l2_fh_exit(file->private_data);
 
-	if (opener->type == WRITER)
+	if (opener->type == V4L2L_WRITER)
 		iswriter = 1;
 
 	if (iswriter) {
-		dev->ready_for_output = 1;
-		dev->ready_for_capture = 0;
+		/* todo: should notify the capture app there is error*/
+		if (dev->state != V4L2L_READY_FOR_OUTPUT)
+			dev->state = V4L2L_READY_FOR_OUTPUT;
+		else
+			pr_warn("invalid proxy close, state %d\n", dev->state);
 	} else {
-		/* notify the close to ais_v4l2_proxy */
-		send_v4l2_event(dev->vdev, AIS_V4L2_CLIENT_OUTPUT,
-			AIS_V4L2_CLOSE_INPUT);
-		reinit_completion(&dev->gparam_complete);
-		reinit_completion(&dev->sparam_complete);
+		/* notify ais_v4l2_proxy to close the input */
+		if (dev->state > V4L2L_READY_FOR_CAPTURE) {
+			send_v4l2_event(dev->vdev, AIS_V4L2_CLIENT_OUTPUT,
+				AIS_V4L2_CLOSE_INPUT);
+			free_buffers(dev);
+			reinit_completion(&dev->gparam_complete);
+			reinit_completion(&dev->sparam_complete);
+			reinit_completion(&dev->ctrl_complete);
+			INIT_LIST_HEAD(&dev->outbufs_list);
+			INIT_LIST_HEAD(&dev->capbufs_list);
+
+			dev->state = V4L2L_READY_FOR_CAPTURE;
+		} else {
+			pr_warn("invalid close state %d\n", dev->state);
+		}
 	}
+
+	v4l2_fh_del(file->private_data);
+	v4l2_fh_exit(file->private_data);
 
 	atomic_dec(&dev->open_count);
 	if (dev->open_count.counter == 0) {
@@ -2575,105 +2627,11 @@ static int v4l2_loopback_close(struct file *file)
 		del_timer_sync(&dev->timeout_timer);
 	}
 
-	/* Todo: the logic is not very clear, need refine*/
-	try_free_buffers(dev);
 	kfree(opener);
 
 	MARK();
 
 	return 0;
-}
-
-static ssize_t v4l2_loopback_read(struct file *file,
-		char __user *buf, size_t count, loff_t *ppos)
-{
-	int read_index;
-	struct v4l2_loopback_opener *opener;
-	struct v4l2_loopback_device *dev;
-	struct v4l2_buffer *b;
-
-	MARK();
-	opener = file->private_data;
-	dev    = v4l2loopback_getdevice(file);
-
-	read_index = get_capture_buffer(file);
-	if (read_index < 0)
-		return read_index;
-	if (count > dev->buffer_size) {
-		pr_err("v4l2-loopback_read(): Size is not equals to buf size\n");
-		count = dev->buffer_size;
-	}
-	b = &dev->buffers[read_index].buffer;
-	if (count > b->bytesused)
-		count = b->bytesused;
-	if (copy_to_user((void __user *)buf,
-				(void *)(dev->image + b->m.offset), count)) {
-		pr_debug("v4l2-loopback: failed copy_to_user() in read buf\n");
-		return -EFAULT;
-	}
-	pr_debug("leave %s\n", __func__);
-	return count;
-}
-
-static ssize_t v4l2_loopback_write(struct file *file,
-		const char __user *buf, size_t count, loff_t *ppos)
-{
-	struct v4l2_loopback_device *dev;
-	int write_index;
-	struct v4l2_buffer *b;
-	int ret;
-
-	MARK();
-	dev = v4l2loopback_getdevice(file);
-
-	/* there's at least one writer,
-	 * so don'stop announcing output capabilities
-	 */
-
-	if (dev->image == NULL && dev->dmabufs[0] == NULL) {
-		pr_err("v4l2-loopback: need allocate buffer at first\n");
-		return -EFAULT;
-	}
-
-	pr_debug("%s: trying to write %zu bytes\n", __func__, count);
-	if (count > dev->buffer_size) {
-		pr_err("v4l2-loopback_write(): Size is not equals to buf size\n");
-		count = dev->buffer_size;
-	}
-
-	write_index = dev->write_position % dev->used_buffers;
-	b = &dev->buffers[write_index].buffer;
-
-	if (dev->io_mode == V4L2L_IO_MODE_MMAP && dev->image) {
-		pr_debug("v4l2-loopback: copy_from_user() in write buf %zu\n",
-				count);
-		if (copy_from_user((void *)(dev->image + b->m.offset),
-					(void __user *)buf, count)) {
-			pr_err("v4l2-loopback: failed copy_from_user, %zu\n",
-				count);
-			return -EFAULT;
-		}
-	} else if (dev->io_mode == V4L2L_IO_MODE_DMABUF && dev->dmabufs[0]) {
-		uintptr_t kvaddr = dev->buffers[write_index].kvaddr;
-
-		if (copy_from_user((void *)(kvaddr),
-				(void __user *)buf, count)) {
-			pr_err("v4l2-loopback: failed copy_from_user() %zu\n",
-				count);
-			return -EFAULT;
-		}
-
-		pr_debug("v4l2-loopback DMABUF: copy_from_user() %zu\n",
-			count);
-	}
-
-	do_gettimeofday(&b->timestamp);
-	b->bytesused = count;
-	b->sequence = dev->write_position;
-	buffer_written(dev, &dev->buffers[write_index]);
-	wake_up_all(&dev->read_event);
-	pr_debug("leave %s\n", __func__);
-	return count;
 }
 
 /* init functions */
@@ -2683,13 +2641,15 @@ static int free_buffers(struct v4l2_loopback_device *dev)
 	int i;
 
 	MARK();
-	pr_debug("freeing image@%pK for dev:%pK\n",
+	pr_info("freeing image@%pK for dev:%pK\n",
 		dev ? dev->image : NULL, dev);
 
 	if (dev == NULL) {
 		pr_err("\ndev value is null\n");
 		return -EINVAL;
 	}
+
+	mutex_lock(&dev->buf_mutex);
 
 	if (dev->image) {
 		vfree(dev->image);
@@ -2701,15 +2661,15 @@ static int free_buffers(struct v4l2_loopback_device *dev)
 	}
 	for (i = 0; i < dev->buffers_number; ++i) {
 		if (dev->dmabufs[i]) {
-			cam_mem_util_unmap_cpu_va(dev->dmabufs[i],
-				dev->buffers[i].kvaddr);
-			dev->buffers[i].kvaddr = NULL;
-			dma_buf_put(dev->dmabufs[i]);
+			dev->buffers[i].kvaddr = 0;
+			dma_buf_put((struct dma_buf *)dev->dmabufs[i]);
 			dev->dmabufs[i] = NULL;
 		}
 	}
 
 	dev->imagesize = 0;
+
+	mutex_unlock(&dev->buf_mutex);
 
 	return 0;
 }
@@ -2720,7 +2680,6 @@ static void try_free_buffers(struct v4l2_loopback_device *dev)
 	MARK();
 	if ((dev->open_count.counter && !dev->keep_format) == 0) {
 		free_buffers(dev);
-		dev->ready_for_capture = 0;
 		dev->write_position = 0;
 	}
 }
@@ -2768,63 +2727,25 @@ static int allocate_buffers(struct v4l2_loopback_device *dev)
 /* allocates buffers, if buffer_size is set */
 static int allocate_dma_buffers(struct v4l2_loopback_device *dev)
 {
-	uint32_t heap_id;
-	uint32_t ion_flag = 0;
-	int rc;
-	int i;
+	int rc = 0;
 
-	MARK();
-	/* vfree on close file operation in case no open handles left */
-
-	pr_debug("allocating %ld = %ldx%d\n",
-			dev->imagesize, dev->buffer_size, dev->buffers_number);
-
-	if (dev->buffer_size == 0)
-		return -EINVAL;
-
-	if (dev->dmabufs[0]) {
-		pr_debug("allocating buffers again: %ld %ld\n",
-			dev->buffer_size * dev->buffers_number, dev->imagesize);
-		/* FIXME: prevent double allocation more intelligently! */
-		if (dev->buffer_size * dev->buffers_number == dev->imagesize)
-			return 0;
-
-		/* if there is only one writer, no problem should occur */
-		if (dev->open_count.counter == 1)
-			free_buffers(dev);
-		else
-			return -EINVAL;
+	send_v4l2_event_ex(dev->vdev, AIS_V4L2_CLIENT_OUTPUT,
+			AIS_V4L2_ALLOC_BUFS, dev->used_buffers);
+	/* wait for the signal */
+	rc = wait_for_completion_timeout(&dev->allocbufs_complete,
+		msecs_to_jiffies(ALLOCBUFS_TIMEOUT));
+	if (rc) {
+		rc = 0;
+	} else {
+		pr_err("allocate fail, timeout %d\n", rc);
+		rc = -ETIMEDOUT;
+		return rc;
 	}
 
-	heap_id = ION_HEAP(ION_SYSTEM_HEAP_ID) |
-			ION_HEAP(ION_CAMERA_HEAP_ID);
-	ion_flag &= ~ION_FLAG_CACHED;
+	if (!dev->allocbufs_ret)
+		init_buffers(dev);
 
-	dev->imagesize = dev->buffer_size * dev->buffers_number;
-
-	pr_debug("allocating dma buffer %ld = %ldx%d\n",
-			dev->imagesize, dev->buffer_size, dev->buffers_number);
-
-	for (i = 0; i < dev->buffers_number; ++i) {
-		dev->dmabufs[i] = ion_alloc(dev->buffer_size,
-			heap_id, ion_flag);
-
-		if (dev->dmabufs[i] == NULL) {
-			rc = -ENOMEM;
-			goto ion_alloc_fail;
-		}
-
-		pr_err("allocating dma buffer\n");
-	}
-
-	pr_debug("dma allocate %ld bytes\n", dev->imagesize);
-	MARK();
-	init_buffers(dev);
-	return 0;
-
-ion_alloc_fail:
-
-	return rc;
+	return dev->allocbufs_ret;
 }
 
 
@@ -2856,7 +2777,10 @@ static void init_buffers(struct v4l2_loopback_device *dev)
 		b->timestamp.tv_usec = 0;
 		b->type              = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
-		do_gettimeofday(&b->timestamp);
+		/* all the buffers are acquired by the proxy when init */
+		dev->buffers[i].state = V4L2L_BUF_USER_ACQUIRED;
+
+		cam_common_util_get_curr_timestamp(&b->timestamp);
 	}
 	dev->timeout_image_buffer = dev->buffers[0];
 	dev->timeout_image_buffer.buffer.m.offset = MAX_BUFFERS * buffer_size;
@@ -2892,6 +2816,9 @@ static void init_vdev(struct video_device *vdev, int nr)
 	vdev->ioctl_ops    = &v4l2_loopback_ioctl_ops;
 	vdev->release      = &video_device_release;
 	vdev->minor        = -1;
+	vdev->device_caps = V4L2_CAP_VIDEO_CAPTURE;
+
+
 	if (debug > 1)
 		vdev->dev_debug =
 			V4L2_DEV_DEBUG_IOCTL | V4L2_DEV_DEBUG_IOCTL_ARG;
@@ -2918,7 +2845,7 @@ static void init_capture_param(struct v4l2_captureparm *capture_param)
 
 static void check_timers(struct v4l2_loopback_device *dev)
 {
-	if (!dev->ready_for_capture)
+	if (!(dev->state & V4L2L_READY_FOR_CAPTURE))
 		return;
 
 	if (dev->timeout_jiffies > 0 && !timer_pending(&dev->timeout_timer))
@@ -3011,19 +2938,15 @@ static int v4l2_loopback_init(struct v4l2_loopback_device *dev, int nr)
 	dev->max_openers = max_openers;
 	dev->write_position = 0;
 	spin_lock_init(&dev->lock);
-	INIT_LIST_HEAD(&dev->outbufs_list);
-	if (list_empty(&dev->outbufs_list)) {
-		int i;
 
-		for (i = 0; i < dev->used_buffers; ++i)
-			list_add_tail(&dev->buffers[i].list_head,
-				&dev->outbufs_list);
-	}
+	// when alloc buffer, all the buffers are acquired by user
+	INIT_LIST_HEAD(&dev->outbufs_list);
+	INIT_LIST_HEAD(&dev->capbufs_list);
+
 	memset(dev->bufpos2index, 0, sizeof(dev->bufpos2index));
 	memset(dev->dmabufs, 0, sizeof(dev->dmabufs));
 	atomic_set(&dev->open_count, 0);
-	dev->ready_for_capture = 0;
-	dev->ready_for_output  = 1;
+	dev->state = V4L2L_READY_FOR_OUTPUT;
 	dev->announce_all_caps = (!exclusive_caps[nr]);
 
 	dev->buffer_size = 0;
@@ -3048,13 +2971,25 @@ static int v4l2_loopback_init(struct v4l2_loopback_device *dev, int nr)
 	v4l2_ctrl_new_custom(hdl, &v4l2loopback_ctrl_sustainframerate, NULL);
 	v4l2_ctrl_new_custom(hdl, &v4l2loopback_ctrl_timeout, NULL);
 	v4l2_ctrl_new_custom(hdl, &v4l2loopback_ctrl_timeoutimageio, NULL);
+
+	ctrl = v4l2_ctrl_new_custom(hdl, &v4l2loopback_ctrl_buffernum, NULL);
+	if (ctrl)
+		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE;
+	else {
+		pr_err("fail to new custom v4l2loopback_ctrl_buffernum \n");
+		goto error;
+	}
+
 	ctrl = v4l2_ctrl_new_custom(hdl, &v4l2loopback_ctrl_datasize, NULL);
 	if (ctrl)
 		ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE;
-	else
+	else {
+		pr_err("fail to new custom v4l2loopback_ctrl_datasize \n");
 		goto error;
+	}
 
 	if (hdl->error) {
+		pr_err("ctrl handler error\n");
 		ret = hdl->error;
 		goto error;
 	}
@@ -3079,18 +3014,27 @@ static int v4l2_loopback_init(struct v4l2_loopback_device *dev, int nr)
 	allocate_buffers(dev);
 
 	init_waitqueue_head(&dev->read_event);
-
 	init_completion(&dev->gparam_complete);
 	init_completion(&dev->sparam_complete);
+	init_completion(&dev->ctrl_complete);
+	init_completion(&dev->allocbufs_complete);
+
+	mutex_init(&dev->buf_mutex);
+	mutex_init(&dev->capbufs_mutex);
+	mutex_init(&dev->outbufs_mutex);
 	ret = v4l2_loopback_cropcap(dev, &cropcap);
-	if (ret)
+	if (ret) {
+		pr_err("fail to v4l2_loopback_cropcap \n");
 		goto error;
+	}
 
 	crop.type = cropcap.type;
 	crop.c = cropcap.defrect;
 	ret = v4l2_loopback_s_crop(dev, &crop, false);
-	if (ret)
+	if (ret) {
+		pr_err("fail to v4l2_loopback_s_crop \n");
 		goto error;
+	}
 
 	MARK();
 	return 0;
@@ -3108,10 +3052,7 @@ static const struct v4l2_file_operations v4l2_loopback_fops = {
 	.owner   = THIS_MODULE,
 	.open    = v4l2_loopback_open,
 	.release = v4l2_loopback_close,
-	.read    = v4l2_loopback_read,
-	.write   = v4l2_loopback_write,
 	.poll    = v4l2_loopback_poll,
-	.mmap    = v4l2_loopback_mmap,
 	.unlocked_ioctl   = video_ioctl2,
 };
 
@@ -3119,12 +3060,6 @@ static const struct v4l2_ioctl_ops v4l2_loopback_ioctl_ops = {
 	.vidioc_querycap         = &vidioc_querycap,
 	.vidioc_enum_framesizes  = &vidioc_enum_framesizes,
 	.vidioc_enum_frameintervals = &vidioc_enum_frameintervals,
-
-#ifndef HAVE__V4L2_CTRLS
-	.vidioc_queryctrl         = &vidioc_queryctrl,
-	.vidioc_g_ctrl            = &vidioc_g_ctrl,
-	.vidioc_s_ctrl            = &vidioc_s_ctrl,
-#endif /* HAVE__V4L2_CTRLS */
 
 	.vidioc_enum_output       = &vidioc_enum_output,
 	.vidioc_g_output          = &vidioc_g_output,
@@ -3143,10 +3078,6 @@ static const struct v4l2_ioctl_ops v4l2_loopback_ioctl_ops = {
 	.vidioc_s_fmt_vid_out    = &vidioc_s_fmt_out,
 	.vidioc_g_fmt_vid_out    = &vidioc_g_fmt_out,
 	.vidioc_try_fmt_vid_out  = &vidioc_try_fmt_out,
-
-	.vidioc_cropcap          = &vidioc_cropcap,
-	.vidioc_g_crop           = &vidioc_g_crop,
-	.vidioc_s_crop           = &vidioc_s_crop,
 
 #ifdef V4L2L_OVERLAY
 	.vidioc_s_fmt_vid_overlay = &vidioc_s_fmt_overlay,
@@ -3197,6 +3128,9 @@ static void free_devices(void)
 	for (i = 0; i < devices; i++) {
 		if (devs[i] != NULL) {
 			free_buffers(devs[i]);
+			mutex_destroy(&devs[i]->buf_mutex);
+			mutex_destroy(&devs[i]->capbufs_mutex);
+			mutex_destroy(&devs[i]->outbufs_mutex);
 			v4l2loopback_remove_sysfs(devs[i]->vdev);
 			kfree(video_get_drvdata(devs[i]->vdev));
 			video_unregister_device(devs[i]->vdev);
@@ -3212,13 +3146,16 @@ static int __init v4l2loopback_init_module(void)
 {
 	int ret;
 	int i;
+	int video_idx = 51;
 
 	MARK();
 	zero_devices();
 
-	video_nr[0] = 51;
-	video_nr[1] = 52;
-	devices = 2;
+	devices = 8;
+	for (i = 0; i < devices; ++i) {
+		video_nr[i] = video_idx + i;
+	}
+
 	max_buffers = 20;
 
 	if (devices < 0) {
@@ -3276,6 +3213,7 @@ static int __init v4l2loopback_init_module(void)
 			free_devices();
 			return ret;
 		}
+
 		/* register the device -> it creates /dev/video* */
 		if (video_register_device(devs[i]->vdev,
 					VFL_TYPE_GRABBER, video_nr[i]) < 0) {
@@ -3306,16 +3244,8 @@ static void v4l2loopback_cleanup_module(void)
 	pr_info("module removed\n");
 }
 
-#ifdef MODULE
-int __init init_module(void)
-{
-	return v4l2loopback_init_module();
-}
-void __exit cleanup_module(void)
-{
-	return v4l2loopback_cleanup_module();
-}
-#else
 late_initcall(v4l2loopback_init_module);
-#endif
+module_exit(v4l2loopback_cleanup_module);
+MODULE_DESCRIPTION("AIS V4L2LOOPBACK driver");
+MODULE_LICENSE("GPL v2");
 
