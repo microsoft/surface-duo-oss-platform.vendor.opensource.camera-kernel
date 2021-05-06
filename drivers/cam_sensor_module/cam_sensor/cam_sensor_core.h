@@ -1,12 +1,14 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2017-2018, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2018,2021 The Linux Foundation. All rights reserved.
  */
 
 #ifndef _CAM_SENSOR_CORE_H_
 #define _CAM_SENSOR_CORE_H_
 
 #include "cam_sensor_dev.h"
+
+#define LT6911UXC_SENSOR_ID 0x1704
 
 /**
  * @s_ctrl: Sensor ctrl structure

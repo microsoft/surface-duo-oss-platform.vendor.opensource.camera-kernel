@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2020,2021 The Linux Foundation. All rights reserved.
  */
 
 #include <linux/module.h>
@@ -690,6 +690,71 @@ int cam_sensor_match_id(struct cam_sensor_ctrl_t *s_ctrl)
 		CAM_ERR(CAM_SENSOR, " failed: %pK",
 			 slave_info);
 		return -EINVAL;
+	}
+
+	// Connect LT6911UXC as camera module.
+	// Add specific case because LT6911UXC need unlock bank first.
+	if (slave_info->sensor_id == LT6911UXC_SENSOR_ID) {
+		struct cam_sensor_i2c_reg_setting m_i2cWriteSettings;
+		struct cam_sensor_i2c_reg_array m_i2cWriteRegArray;
+		uint32_t l_chipid = 0;
+
+		// Initialize
+		m_i2cWriteRegArray.reg_addr = 0;
+		m_i2cWriteRegArray.reg_data = 0;
+		m_i2cWriteRegArray.delay = 0;
+		m_i2cWriteRegArray.data_mask = 0;
+
+		m_i2cWriteSettings.reg_setting = &m_i2cWriteRegArray;
+		m_i2cWriteSettings.size = 1;
+		m_i2cWriteSettings.addr_type = CAMERA_SENSOR_I2C_TYPE_BYTE;
+		m_i2cWriteSettings.data_type = CAMERA_SENSOR_I2C_TYPE_BYTE;
+		m_i2cWriteSettings.delay = 0;
+
+		CAM_INFO(CAM_SENSOR,
+			"lt6911uxc >> unlocked and set bank to 0x81");
+
+		m_i2cWriteRegArray.reg_addr = 0xff;
+		m_i2cWriteRegArray.reg_data = 0x80;
+		rc = camera_io_dev_write(&(s_ctrl->io_master_info),
+				&m_i2cWriteSettings);
+		m_i2cWriteRegArray.reg_addr = 0xee;
+		m_i2cWriteRegArray.reg_data = 0x01;
+		rc = camera_io_dev_write(&(s_ctrl->io_master_info),
+				&m_i2cWriteSettings);
+
+		m_i2cWriteRegArray.reg_addr = 0xff;
+		m_i2cWriteRegArray.reg_data = 0x81;
+		rc = camera_io_dev_write(&(s_ctrl->io_master_info),
+				&m_i2cWriteSettings);
+
+		rc = camera_io_dev_read(
+				&(s_ctrl->io_master_info),
+				slave_info->sensor_id_reg_addr,
+				&chipid,
+				s_ctrl->sensor_probe_addr_type,
+				s_ctrl->sensor_probe_data_type);
+
+		CAM_INFO(CAM_SENSOR, "read id: 0x%x expected id 0x%x:",
+				chipid, slave_info->sensor_id);
+		l_chipid = cam_sensor_id_by_mask(s_ctrl, chipid);
+		if (l_chipid != slave_info->sensor_id) {
+			CAM_INFO(CAM_SENSOR, "read id: 0x%x expected id 0x%x:",
+					chipid, slave_info->sensor_id);
+			return -ENODEV;
+		}
+
+		CAM_INFO(CAM_SENSOR, "lt6911uxc >> locked bank");
+		m_i2cWriteRegArray.reg_addr = 0xff;
+		m_i2cWriteRegArray.reg_data = 0x80;
+		camera_io_dev_write(&(s_ctrl->io_master_info),
+				&m_i2cWriteSettings);
+		m_i2cWriteRegArray.reg_addr = 0xee;
+		m_i2cWriteRegArray.reg_data = 0x00;
+		camera_io_dev_write(&(s_ctrl->io_master_info),
+				&m_i2cWriteSettings);
+
+		return rc;
 	}
 
 	rc = camera_io_dev_read(
