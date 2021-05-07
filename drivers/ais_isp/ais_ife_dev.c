@@ -604,13 +604,11 @@ static int ais_ife_dev_probe(struct platform_device *pdev)
 		goto unregister;
 	}
 
-    // workround for null cp node
-    p_ife_dev->iommu_hdl_secure = -1; // HANDLE_INIT
 	rc = cam_smmu_get_handle("ife-cp",
 		&p_ife_dev->iommu_hdl_secure);
 	if (rc) {
-		CAM_WARN(CAM_ISP, "Failed to get secure iommu handle %d", rc);
-		//goto secure_fail;
+		CAM_ERR(CAM_ISP, "Failed to get secure iommu handle %d", rc);
+		goto secure_fail;
 	}
 
 	CAM_DBG(CAM_ISP, "iommu_handles: non-secure[0x%x], secure[0x%x]",
