@@ -14,6 +14,8 @@
 #define CAM_FLASH_MAX_LED_TRIGGERS 3
 #define MAX_OIS_NAME_SIZE 32
 #define CAM_CSIPHY_SECURE_MODE_ENABLED 1
+#define CAM_READ_MAX_NUM 4
+
 /**
  * struct cam_sensor_query_cap - capabilities info for sensor
  *
@@ -40,6 +42,7 @@ struct  cam_sensor_query_cap {
 	uint32_t        ois_slot_id;
 	uint32_t        flash_slot_id;
 	uint32_t        csiphy_slot_id;
+	uint32_t        LinkStatus;
 } __attribute__((packed));
 
 /**
@@ -165,6 +168,7 @@ struct cam_cmd_probe {
 	uint32_t    data_mask;
 	uint16_t    camera_id;
 	uint16_t    reserved;
+	uint32_t    readAddr[CAM_READ_MAX_NUM];
 } __attribute__((packed));
 
 /**

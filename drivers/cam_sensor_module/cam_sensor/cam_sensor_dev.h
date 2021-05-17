@@ -111,6 +111,8 @@ struct cam_sensor_ctrl_t {
 	bool bob_pwm_switch;
 	uint32_t last_flush_req;
 	uint16_t pipeline_delay;
+	uint32_t readAddr[CAM_READ_MAX_NUM];
+	uint32_t readData;
 };
 
 #endif /* _CAM_SENSOR_DEV_H_ */

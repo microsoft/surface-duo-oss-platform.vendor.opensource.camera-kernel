@@ -466,15 +466,19 @@ int32_t cam_sensor_update_slave_info(struct cam_cmd_probe *probe_info,
 	/* Userspace passes the pipeline delay in reserved field */
 	s_ctrl->pipeline_delay =
 		probe_info->reserved;
-
+	for(int i = 0; i < CAM_READ_MAX_NUM; i++ ){
+	s_ctrl->readAddr[i] =
+		probe_info->readAddr[i];
+	}
 	s_ctrl->sensor_probe_addr_type =  probe_info->addr_type;
 	s_ctrl->sensor_probe_data_type =  probe_info->data_type;
 	CAM_DBG(CAM_SENSOR,
-		"Sensor Addr: 0x%x sensor_id: 0x%x sensor_mask: 0x%x sensor_pipeline_delay:0x%x",
+		"Sensor Addr: 0x%x sensor_id: 0x%x sensor_mask: 0x%x sensor_pipeline_delay:0x%x read Addr[0]:0x%x",
 		s_ctrl->sensordata->slave_info.sensor_id_reg_addr,
 		s_ctrl->sensordata->slave_info.sensor_id,
 		s_ctrl->sensordata->slave_info.sensor_id_mask,
-		s_ctrl->pipeline_delay);
+		s_ctrl->pipeline_delay,
+		s_ctrl->readAddr[0]);
 	return rc;
 }
 
@@ -636,6 +640,8 @@ void cam_sensor_query_cap(struct cam_sensor_ctrl_t *s_ctrl,
 		s_ctrl->sensordata->subdev_id[SUB_MODULE_OIS];
 	query_cap->slot_info =
 		s_ctrl->soc_info.index;
+	query_cap->LinkStatus =
+		s_ctrl->readData;
 }
 
 static uint16_t cam_sensor_id_by_mask(struct cam_sensor_ctrl_t *s_ctrl,
@@ -693,6 +699,7 @@ void cam_sensor_shutdown(struct cam_sensor_ctrl_t *s_ctrl)
 	s_ctrl->streamoff_count = 0;
 	s_ctrl->is_probe_succeed = 0;
 	s_ctrl->last_flush_req = 0;
+	s_ctrl->readData = 0;
 	s_ctrl->sensor_state = CAM_SENSOR_INIT;
 }
 
@@ -710,30 +717,11 @@ int cam_sensor_match_id(struct cam_sensor_ctrl_t *s_ctrl)
 		return -EINVAL;
 	}
 
-    if (slave_info->sensor_id_reg_addr == 0x1A0A){
-        uint32_t chipid1 = 0;
-        uint32_t chipid2 = 0;
-        rc = camera_io_dev_read(
-		&(s_ctrl->io_master_info),0x1A,
-		&chipid1, CAMERA_SENSOR_I2C_TYPE_WORD,
-		CAMERA_SENSOR_I2C_TYPE_BYTE);
-        if(!rc){
-            rc = camera_io_dev_read(
-            &(s_ctrl->io_master_info),0x0A,
-            &chipid2, CAMERA_SENSOR_I2C_TYPE_WORD,
-            CAMERA_SENSOR_I2C_TYPE_3B);
-        }
-        chipid = ((chipid1 & 0xC8 ?1:0) << 12) | ((chipid2 & 0xC80000 ?1:0) << 8) |
-            ((chipid2 & 0xC800 ?1:0) << 4) | (chipid2 & 0xC8 ?1:0);
-        CAM_DBG(CAM_SENSOR, "match id data conversion camera_id:%d, read id: 0x%x expected id: 0x%x, chipid1:0x%x, chipid2:0x%x",s_ctrl->id,
-		chipid, slave_info->sensor_id, chipid1, chipid2);
-    }else{
 	rc = camera_io_dev_read(
 		&(s_ctrl->io_master_info),
 		slave_info->sensor_id_reg_addr,
 		&chipid, CAMERA_SENSOR_I2C_TYPE_WORD,
 		CAMERA_SENSOR_I2C_TYPE_WORD);
-    }
 
 	CAM_DBG(CAM_SENSOR, "read id: 0x%x expected id 0x%x:",
 		chipid, slave_info->sensor_id);
@@ -743,8 +731,40 @@ int cam_sensor_match_id(struct cam_sensor_ctrl_t *s_ctrl)
 				chipid, slave_info->sensor_id);
 		return -ENODEV;
 	}
+	else if(!s_ctrl->readData && slave_info->sensor_slave_addr == 0x52){
+		CAM_WARN(CAM_SENSOR, "Linkstatus: 0x%x None any GMSL camera link",
+				s_ctrl->readData);
+		return -ENODEV;
+	}
 	return rc;
 }
+
+uint32_t cam_sensor_read_reg(struct cam_sensor_ctrl_t *s_ctrl)
+{
+    uint32_t readData = 0;
+    int      rc = 0, i;
+
+	if (!s_ctrl->readAddr[0]) {
+		CAM_ERR(CAM_SENSOR, " failed");
+		return readData;
+	}
+	for(i = 0; i < CAM_READ_MAX_NUM; i++){
+		uint32_t chipid   = 0;
+		if (s_ctrl->readAddr[i] != 0x0){
+			rc = camera_io_dev_read(
+				&(s_ctrl->io_master_info),s_ctrl->readAddr[i],
+				&chipid, CAMERA_SENSOR_I2C_TYPE_WORD,
+				CAMERA_SENSOR_I2C_TYPE_BYTE);
+
+			readData = readData | ((chipid & 0x08 ?1:0) << i);
+			CAM_DBG(CAM_SENSOR, "Read reg for link status[%d] :0x%x, readData:0x%x",i,chipid,readData);
+		}
+	}
+	s_ctrl->readData = readData;
+
+	return rc;
+}
+
 
 int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 	void *arg)
@@ -818,6 +838,12 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 		if (rc < 0) {
 			CAM_ERR(CAM_SENSOR, "power up failed");
 			goto free_power_settings;
+		}
+
+		/* Read sensor Link Status */
+		rc = cam_sensor_read_reg(s_ctrl);
+		if (rc < 0) {
+			CAM_ERR(CAM_SENSOR, "read link status failed");
 		}
 
 		/* Match sensor ID */
