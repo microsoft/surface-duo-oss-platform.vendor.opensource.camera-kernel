@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/uaccess.h>
@@ -38,6 +38,113 @@ static struct cam_jpeg_hw_mgr g_jpeg_hw_mgr;
 static int32_t cam_jpeg_hw_mgr_cb(uint32_t irq_status,
 	int32_t result_size, void *data);
 static int cam_jpeg_mgr_process_cmd(void *priv, void *data);
+static int cam_jpeg_insert_cdm_change_base(
+	struct cam_hw_config_args *config_args,
+	struct cam_jpeg_hw_ctx_data *ctx_data,
+	struct cam_jpeg_hw_mgr *hw_mgr);
+
+static int cam_jpeg_process_next_hw_update(void *priv, void *data)
+{
+	int rc;
+	int i = 0;
+	struct cam_jpeg_hw_mgr *hw_mgr = priv;
+	struct cam_hw_update_entry *cmd;
+	struct cam_cdm_bl_request *cdm_cmd;
+	struct cam_hw_config_args *config_args = NULL;
+	struct cam_jpeg_hw_ctx_data *ctx_data = NULL;
+	uint32_t dev_type;
+	struct cam_jpeg_hw_cfg_req *p_cfg_req = NULL;
+	uint32_t cdm_cfg_to_insert = 0;
+
+	if (!data || !priv) {
+		CAM_ERR(CAM_JPEG, "Invalid data");
+		return -EINVAL;
+	}
+
+	ctx_data = (struct cam_jpeg_hw_ctx_data *)data;
+	dev_type = ctx_data->jpeg_dev_acquire_info.dev_type;
+	p_cfg_req = hw_mgr->dev_hw_cfg_args[dev_type][0];
+	config_args = (struct cam_hw_config_args *)&p_cfg_req->hw_cfg_args;
+
+	if (!hw_mgr->devices[dev_type][0]->hw_ops.reset) {
+		CAM_ERR(CAM_JPEG, "op reset null ");
+		rc = -EFAULT;
+		goto end_error;
+	}
+	rc = hw_mgr->devices[dev_type][0]->hw_ops.reset(
+		hw_mgr->devices[dev_type][0]->hw_priv,
+		NULL, 0);
+	if (rc) {
+		CAM_ERR(CAM_JPEG, "jpeg hw reset failed %d", rc);
+		goto end_error;
+	}
+
+	cdm_cmd = ctx_data->cdm_cmd;
+	cdm_cmd->type = CAM_CDM_BL_CMD_TYPE_MEM_HANDLE;
+	cdm_cmd->flag = false;
+	cdm_cmd->userdata = NULL;
+	cdm_cmd->cookie = 0;
+	cdm_cmd->cmd_arrary_count = 0;
+
+	/* insert cdm chage base cmd */
+	rc = cam_jpeg_insert_cdm_change_base(config_args,
+		ctx_data, hw_mgr);
+	if (rc) {
+		CAM_ERR(CAM_JPEG, "insert change base failed %d", rc);
+		goto end_error;
+	}
+
+	/* insert next cdm payload at index */
+	/* for enc or dma 1st pass at index 1 */
+	/* for dma 2nd pass at index 2, for 3rd at 4 */
+	if (p_cfg_req->num_hw_entry_processed == 0)
+		cdm_cfg_to_insert = CAM_JPEG_CFG;
+	else
+		cdm_cfg_to_insert = p_cfg_req->num_hw_entry_processed + 2;
+
+	CAM_DBG(CAM_JPEG, "processed %d total %d using cfg entry %d for %pK",
+		p_cfg_req->num_hw_entry_processed,
+		config_args->num_hw_update_entries,
+		cdm_cfg_to_insert,
+		p_cfg_req);
+
+	cmd = (config_args->hw_update_entries + cdm_cfg_to_insert);
+	cdm_cmd->cmd[cdm_cmd->cmd_arrary_count].bl_addr.mem_handle =
+		cmd->handle;
+	cdm_cmd->cmd[cdm_cmd->cmd_arrary_count].offset =
+		cmd->offset;
+	cdm_cmd->cmd[cdm_cmd->cmd_arrary_count].len =
+		cmd->len;
+	CAM_DBG(CAM_JPEG, "i %d entry h %d o %d l %d",
+		i, cmd->handle, cmd->offset, cmd->len);
+	cdm_cmd->cmd_arrary_count++;
+
+	rc = cam_cdm_submit_bls(
+		hw_mgr->cdm_info[dev_type][0].cdm_handle,
+		cdm_cmd);
+	if (rc) {
+		CAM_ERR(CAM_JPEG, "Failed to apply the configs %d", rc);
+		goto end_error;
+	}
+
+	if (!hw_mgr->devices[dev_type][0]->hw_ops.start) {
+		CAM_ERR(CAM_JPEG, "op start null ");
+		rc = -EINVAL;
+		goto end_error;
+	}
+	rc = hw_mgr->devices[dev_type][0]->hw_ops.start(
+		hw_mgr->devices[dev_type][0]->hw_priv, NULL, 0);
+	if (rc) {
+		CAM_ERR(CAM_JPEG, "Failed to apply the configs %d",
+			rc);
+		goto end_error;
+	}
+
+	return 0;
+end_error:
+	return rc;
+}
+
 
 static int cam_jpeg_mgr_process_irq(void *priv, void *data)
 {
@@ -83,6 +190,21 @@ static int cam_jpeg_mgr_process_irq(void *priv, void *data)
 		CAM_ERR(CAM_JPEG, "irq for old request %d", rc);
 		mutex_unlock(&g_jpeg_hw_mgr.hw_mgr_mutex);
 		return -EINVAL;
+	}
+
+	p_cfg_req->num_hw_entry_processed++;
+	CAM_DBG(CAM_JPEG, "hw entry processed %d",
+		p_cfg_req->num_hw_entry_processed);
+
+	if ((task_data->result_size > 0) &&
+		(p_cfg_req->num_hw_entry_processed <
+			p_cfg_req->hw_cfg_args.num_hw_update_entries - 2)) {
+		/* start processing next entry before marking device free */
+		rc  = cam_jpeg_process_next_hw_update(priv, ctx_data);
+		if (!rc) {
+			mutex_unlock(&g_jpeg_hw_mgr.hw_mgr_mutex);
+			return 0;
+		}
 	}
 
 	irq_cb.jpeg_hw_mgr_cb = cam_jpeg_hw_mgr_cb;
@@ -422,69 +544,14 @@ static int cam_jpeg_mgr_process_cmd(void *priv, void *data)
 		goto end_callcb;
 	}
 
-	if (!hw_mgr->devices[dev_type][0]->hw_ops.reset) {
-		CAM_ERR(CAM_JPEG, "op reset null ");
-		rc = -EFAULT;
-		goto end_callcb;
-	}
-	rc = hw_mgr->devices[dev_type][0]->hw_ops.reset(
-		hw_mgr->devices[dev_type][0]->hw_priv,
-		NULL, 0);
+	/* insert one of the cdm payloads */
+	rc = cam_jpeg_process_next_hw_update(priv, ctx_data);
 	if (rc) {
-		CAM_ERR(CAM_JPEG, "jpeg hw reset failed %d", rc);
+		CAM_ERR(CAM_JPEG, "next hw update failed %d", rc);
 		goto end_callcb;
 	}
 
-	cdm_cmd = ctx_data->cdm_cmd;
-	cdm_cmd->type = CAM_CDM_BL_CMD_TYPE_MEM_HANDLE;
-	cdm_cmd->flag = false;
-	cdm_cmd->userdata = NULL;
-	cdm_cmd->cookie = 0;
-	cdm_cmd->cmd_arrary_count = 0;
-
-	rc = cam_jpeg_insert_cdm_change_base(config_args,
-		ctx_data, hw_mgr);
-	if (rc) {
-		CAM_ERR(CAM_JPEG, "insert change base failed %d", rc);
-		goto end_callcb;
-	}
-
-	CAM_DBG(CAM_JPEG, "num hw up %d", config_args->num_hw_update_entries);
-	for (i = CAM_JPEG_CFG; i < (config_args->num_hw_update_entries - 1);
-		i++) {
-		cmd = (config_args->hw_update_entries + i);
-		cdm_cmd->cmd[cdm_cmd->cmd_arrary_count].bl_addr.mem_handle
-			= cmd->handle;
-		cdm_cmd->cmd[cdm_cmd->cmd_arrary_count].offset =
-			cmd->offset;
-		cdm_cmd->cmd[cdm_cmd->cmd_arrary_count].len =
-			cmd->len;
-		CAM_DBG(CAM_JPEG, "i %d entry h %d o %d l %d",
-			i, cmd->handle, cmd->offset, cmd->len);
-		cdm_cmd->cmd_arrary_count++;
-	}
-
-	rc = cam_cdm_submit_bls(
-		hw_mgr->cdm_info[dev_type][0].cdm_handle, cdm_cmd);
-	if (rc) {
-		CAM_ERR(CAM_JPEG, "Failed to apply the configs %d", rc);
-		goto end_callcb;
-	}
-
-	if (!hw_mgr->devices[dev_type][0]->hw_ops.start) {
-		CAM_ERR(CAM_JPEG, "op start null ");
-		rc = -EINVAL;
-		goto end_callcb;
-	}
-	rc = hw_mgr->devices[dev_type][0]->hw_ops.start(
-		hw_mgr->devices[dev_type][0]->hw_priv,
-		NULL, 0);
-	if (rc) {
-		CAM_ERR(CAM_JPEG, "Failed to start hw %d",
-			rc);
-		goto end_callcb;
-	}
-	p_cfg_req->submit_timestamp = ktime_get();
+	cam_common_util_get_curr_timestamp(&p_cfg_req->submit_timestamp);
 
 	mutex_unlock(&hw_mgr->hw_mgr_mutex);
 	return rc;
@@ -561,6 +628,7 @@ static int cam_jpeg_mgr_config_hw(void *hw_mgr_priv, void *config_hw_args)
 
 	request_id = (uintptr_t)config_args->priv;
 	p_cfg_req->req_id = request_id;
+	p_cfg_req->num_hw_entry_processed = 0;
 	hw_update_entries = config_args->hw_update_entries;
 	CAM_DBG(CAM_JPEG, "ctx_data = %pK req_id = %lld %zd",
 		ctx_data, request_id, (uintptr_t)config_args->priv);
@@ -775,6 +843,7 @@ static int cam_jpeg_mgr_prepare_hw_update(void *hw_mgr_priv,
 			i, io_cfg_ptr[i].direction, io_cfg_ptr[i].fence);
 	}
 
+	CAM_DBG(CAM_JPEG, "received num cmd buf %d", packet->num_cmd_buf);
 
 	j = prepare_args->num_hw_update_entries;
 	rc = cam_packet_util_get_kmd_buffer(packet, &kmd_buf);
@@ -837,6 +906,17 @@ static void cam_jpeg_mgr_stop_deinit_dev(struct cam_jpeg_hw_mgr *hw_mgr,
 			CAM_ERR(CAM_JPEG, "stop fail %d", rc);
 	} else {
 		CAM_ERR(CAM_JPEG, "op stop null %d", dev_type);
+	}
+
+	if (hw_mgr->devices[dev_type][0]->hw_ops.reset) {
+		rc = hw_mgr->devices[dev_type][0]->hw_ops.reset(
+			hw_mgr->devices[dev_type][0]->hw_priv,
+			NULL, 0);
+		if (rc)
+			CAM_ERR(CAM_JPEG, "jpeg hw reset failed %d:%d",
+				dev_type, rc);
+	} else {
+		CAM_ERR(CAM_JPEG, "op hw reset null %d", dev_type);
 	}
 
 	if (hw_mgr->devices[dev_type][0]->hw_ops.deinit) {
@@ -1503,14 +1583,12 @@ static int cam_jpeg_mgr_hw_dump(void *hw_mgr_priv, void *dump_hw_args)
 {
 	int                             rc;
 	uint8_t                        *dst;
-	ktime_t                         cur_time;
+	struct timeval                  cur_time;
 	size_t                          remain_len;
 	uint32_t                        min_len;
 	uint32_t                        dev_type;
 	uint64_t                        diff;
 	uint64_t                       *addr, *start;
-	struct timespec64               cur_ts;
-	struct timespec64               req_ts;
 	struct cam_jpeg_hw_mgr         *hw_mgr;
 	struct cam_hw_dump_args        *dump_args;
 	struct cam_jpeg_hw_cfg_req     *p_cfg_req;
@@ -1554,19 +1632,18 @@ static int cam_jpeg_mgr_hw_dump(void *hw_mgr_priv, void *dump_hw_args)
 	return 0;
 
 hw_dump:
-	cur_time = ktime_get();
-	diff = ktime_us_delta(cur_time, p_cfg_req->submit_timestamp);
-	cur_ts = ktime_to_timespec64(cur_time);
-	req_ts = ktime_to_timespec64(p_cfg_req->submit_timestamp);
+	cam_common_util_get_curr_timestamp(&cur_time);
+	diff = cam_common_util_get_time_diff(&cur_time,
+		&p_cfg_req->submit_timestamp);
 
 	if (diff < CAM_JPEG_RESPONSE_TIME_THRESHOLD) {
 		CAM_INFO(CAM_JPEG,
 			"No error req %lld %ld:%06ld %ld:%06ld",
 			dump_args->request_id,
-			req_ts.tv_sec,
-			req_ts.tv_nsec/NSEC_PER_USEC,
-			cur_ts.tv_sec,
-			cur_ts.tv_nsec/NSEC_PER_USEC);
+			p_cfg_req->submit_timestamp.tv_sec,
+			p_cfg_req->submit_timestamp.tv_usec,
+			cur_time.tv_sec,
+			cur_time.tv_usec);
 		mutex_unlock(&hw_mgr->hw_mgr_mutex);
 		return 0;
 	}
@@ -1574,10 +1651,11 @@ hw_dump:
 	CAM_INFO(CAM_JPEG,
 		"Error req %lld %ld:%06ld %ld:%06ld",
 		dump_args->request_id,
-		req_ts.tv_sec,
-		req_ts.tv_nsec/NSEC_PER_USEC,
-		cur_ts.tv_sec,
-		cur_ts.tv_nsec/NSEC_PER_USEC);
+		p_cfg_req->submit_timestamp.tv_sec,
+		p_cfg_req->submit_timestamp.tv_usec,
+		cur_time.tv_sec,
+		cur_time.tv_usec);
+	memset(&jpeg_dump_args, 0, sizeof(jpeg_dump_args));
 	rc  = cam_mem_get_cpu_buf(dump_args->buf_handle,
 		&jpeg_dump_args.cpu_addr, &jpeg_dump_args.buf_len);
 	if (rc) {
@@ -1612,10 +1690,10 @@ hw_dump:
 	addr = (uint64_t *)(dst + sizeof(struct cam_jpeg_hw_dump_header));
 	start = addr;
 	*addr++ = dump_args->request_id;
-	*addr++ = req_ts.tv_sec;
-	*addr++ = req_ts.tv_nsec/NSEC_PER_USEC;
-	*addr++ = cur_ts.tv_sec;
-	*addr++ = cur_ts.tv_nsec/NSEC_PER_USEC;
+	*addr++ = p_cfg_req->submit_timestamp.tv_sec;
+	*addr++ = p_cfg_req->submit_timestamp.tv_usec;
+	*addr++ = cur_time.tv_sec;
+	*addr++ = cur_time.tv_usec;
 	hdr->size = hdr->word_size * (addr - start);
 	dump_args->offset += hdr->size +
 		sizeof(struct cam_jpeg_hw_dump_header);
