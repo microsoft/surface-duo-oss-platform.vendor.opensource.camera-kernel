@@ -9,3 +9,4 @@ obj-$(CONFIG_MSM_AIS_FLASH) += cam_flash/
 obj-$(CONFIG_MSM_AIS_EEPROM) += cam_eeprom/
 obj-$(CONFIG_MSM_AIS_OIS) += cam_ois/
 obj-$(CONFIG_MSM_AIS_IRLED) += cam_ir_led/
+obj-$(CONFIG_MSM_AIS_SENSOR_SERDES) += cam_sensor_serdes/
