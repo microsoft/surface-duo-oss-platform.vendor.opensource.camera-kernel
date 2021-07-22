@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2017-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
  */
 
 #include <linux/module.h>
 #include "cam_cci_core.h"
 #include "cam_cci_dev.h"
 #include "cam_req_mgr_workq.h"
+#include "cam_common_util.h"
 
 static int32_t cam_cci_convert_type_to_num_bytes(
 	enum camera_sensor_i2c_type type)
@@ -985,6 +986,7 @@ static int32_t cam_cci_burst_read(struct v4l2_subdev *sd,
 	}
 
 	mutex_lock(&cci_dev->cci_master_info[master].mutex_q[queue]);
+	cci_dev->is_burst_read[master] = true;
 	reinit_completion(&cci_dev->cci_master_info[master].report_q[queue]);
 
 	soc_info = &cci_dev->soc_info;
@@ -1256,6 +1258,7 @@ static int32_t cam_cci_read(struct v4l2_subdev *sd,
 	}
 
 	mutex_lock(&cci_dev->cci_master_info[master].mutex_q[queue]);
+	cci_dev->is_burst_read[master] = false;
 	reinit_completion(&cci_dev->cci_master_info[master].report_q[queue]);
 
 	soc_info = &cci_dev->soc_info;
@@ -1496,8 +1499,10 @@ static void cam_cci_write_async_helper(struct work_struct *work)
 	enum cci_i2c_master_t master;
 	struct cam_cci_master_info *cci_master_info;
 
-	cam_req_mgr_thread_switch_delay_detect(
-		write_async->workq_scheduled_ts);
+	cam_common_util_thread_switch_delay_detect(
+		"CCI workq schedule",
+		write_async->workq_scheduled_ts,
+		CAM_WORKQ_SCHEDULE_TIME_THRESHOLD);
 	cci_dev = write_async->cci_dev;
 	i2c_msg = &write_async->c_ctrl.cfg.cci_i2c_write_cfg;
 	master = write_async->c_ctrl.cci_info->cci_i2c_master;
@@ -1622,7 +1627,7 @@ static int32_t cam_cci_read_bytes_v_1_2(struct v4l2_subdev *sd,
 		else
 			read_cfg->num_byte = read_bytes;
 
-		cci_dev->is_burst_read = false;
+		cci_dev->is_burst_read[master] = false;
 		rc = cam_cci_read(sd, c_ctrl);
 		if (rc) {
 			CAM_ERR(CAM_CCI, "failed to read rc:%d", rc);
@@ -1639,7 +1644,6 @@ static int32_t cam_cci_read_bytes_v_1_2(struct v4l2_subdev *sd,
 	} while (read_bytes);
 
 ERROR:
-	cci_dev->is_burst_read = false;
 	return rc;
 }
 
@@ -1704,10 +1708,8 @@ static int32_t cam_cci_read_bytes(struct v4l2_subdev *sd,
 			read_cfg->num_byte = read_bytes;
 
 		if (read_cfg->num_byte >= CCI_READ_MAX) {
-			cci_dev->is_burst_read = true;
 			rc = cam_cci_burst_read(sd, c_ctrl);
 		} else {
-			cci_dev->is_burst_read = false;
 			rc = cam_cci_read(sd, c_ctrl);
 		}
 		if (rc) {
@@ -1726,7 +1728,6 @@ static int32_t cam_cci_read_bytes(struct v4l2_subdev *sd,
 	} while (read_bytes);
 
 ERROR:
-	cci_dev->is_burst_read = false;
 	return rc;
 }
 
