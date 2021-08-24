@@ -369,6 +369,7 @@ static int32_t cam_sensor_driver_platform_probe(
 	platform_set_drvdata(pdev, s_ctrl);
 	s_ctrl->sensor_state = CAM_SENSOR_INIT;
 	g_sensor_subdev[soc_info->index] = &s_ctrl->v4l2_dev_str.sd;
+	s_ctrl->no_lpm_mode_enabled = false;
 
 	return rc;
 unreg_subdev:
@@ -390,6 +391,14 @@ static int cam_pm_sensor_suspend(struct device *pdev)
 	cam_cmd.size        = 0;
 	s_ctrl = dev_get_drvdata(pdev);
 	rc = cam_sensor_driver_cmd(s_ctrl, &cam_cmd);
+	/* will return success if its already powered down or device is not connected */
+	if (rc == -EINVAL || rc == -ENODEV) {
+		s_ctrl->no_lpm_mode_enabled = true;
+		rc = 0;
+	}
+	else {
+		s_ctrl->no_lpm_mode_enabled = false;
+	}
 	if (rc < 0)
 		CAM_ERR(CAM_SENSOR, "Failed to I2C_POWER_DOWN sensor");
 	return rc;
@@ -406,6 +415,11 @@ static int cam_pm_sensor_resume(struct device *pdev)
 	cam_cmd.handle_type = CAM_HANDLE_USER_POINTER;
 	cam_cmd.size        = 0;
 	s_ctrl = dev_get_drvdata(pdev);
+
+	/* will return success if no_lpm_mode_enabled */
+	if (s_ctrl->no_lpm_mode_enabled)
+		return 0;
+
 	rc = cam_sensor_driver_cmd(s_ctrl, &cam_cmd);
 	if (rc < 0)
 		CAM_ERR(CAM_SENSOR, "Failed to I2C_POWER_UP sensor");
@@ -424,6 +438,9 @@ static int cam_pm_sensor_hibernation_suspend(struct device *pdev)
 	cam_cmd.size        = 0;
 	s_ctrl = dev_get_drvdata(pdev);
 	rc = cam_sensor_driver_cmd(s_ctrl, &cam_cmd);
+	/* will return success if its already powered down or device is not connected */
+	if (rc == -EINVAL || rc == -ENODEV)
+		rc = 0;
 	if (rc < 0)
 		CAM_ERR(CAM_SENSOR, "Failed to I2C_POWER_DOWN sensor");
 	return rc;
