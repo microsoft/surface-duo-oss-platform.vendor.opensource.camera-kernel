@@ -42,10 +42,10 @@ void cam_req_mgr_core_link_reset(struct cam_req_mgr_core_link *link)
 	link->last_flush_id = 0;
 	link->initial_sync_req = -1;
 	link->dual_trigger = false;
-	link->trigger_cnt[0][0] = 0;
-	link->trigger_cnt[0][1] = 0;
-	link->trigger_cnt[1][0] = 0;
-	link->trigger_cnt[1][1] = 0;
+	link->trigger_cnt[0][CAM_TRIGGER_POINT_SOF] = 0;
+	link->trigger_cnt[0][CAM_TRIGGER_POINT_EOF] = 0;
+	link->trigger_cnt[1][CAM_TRIGGER_POINT_SOF] = 0;
+	link->trigger_cnt[1][CAM_TRIGGER_POINT_EOF] = 0;
 	link->in_msync_mode = false;
 	link->retry_cnt = 0;
 	link->is_shutdown = false;
@@ -574,10 +574,10 @@ static void __cam_req_mgr_flush_req_slot(
 	atomic_set(&link->eof_event_cnt, 0);
 	in_q->wr_idx = 0;
 	in_q->rd_idx = 0;
-	link->trigger_cnt[0][0] = 0;
-	link->trigger_cnt[0][1] = 0;
-	link->trigger_cnt[1][0] = 0;
-	link->trigger_cnt[1][1] = 0;
+	link->trigger_cnt[0][CAM_TRIGGER_POINT_SOF] = 0;
+	link->trigger_cnt[0][CAM_TRIGGER_POINT_EOF] = 0;
+	link->trigger_cnt[1][CAM_TRIGGER_POINT_SOF] = 0;
+	link->trigger_cnt[1][CAM_TRIGGER_POINT_EOF] = 0;
 }
 
 /**
@@ -2913,6 +2913,13 @@ int cam_req_mgr_process_error(void *priv, void *data)
 			in_q->rd_idx = idx;
 			in_q->slot[idx].status = CRM_SLOT_STATUS_REQ_ADDED;
 
+			if (link->sync_link[0]) {
+				in_q->slot[idx].sync_mode = 0;
+				__cam_req_mgr_inc_idx(&idx, 1,
+					link->req.l_tbl->num_slots);
+				in_q->slot[idx].sync_mode = 0;
+			}
+
 			/* The next req may also be applied */
 			idx = in_q->rd_idx;
 			__cam_req_mgr_inc_idx(&idx, 1,
@@ -4077,10 +4084,10 @@ int cam_req_mgr_link_v2(struct cam_req_mgr_ver_info *link_info)
 		goto setup_failed;
 	}
 
-	link->trigger_cnt[0][0] = 0;
-	link->trigger_cnt[0][1] = 0;
-	link->trigger_cnt[1][0] = 0;
-	link->trigger_cnt[1][1] = 0;
+	link->trigger_cnt[0][CAM_TRIGGER_POINT_SOF] = 0;
+	link->trigger_cnt[0][CAM_TRIGGER_POINT_EOF] = 0;
+	link->trigger_cnt[1][CAM_TRIGGER_POINT_SOF] = 0;
+	link->trigger_cnt[1][CAM_TRIGGER_POINT_EOF] = 0;
 
 	mutex_unlock(&link->lock);
 	mutex_unlock(&g_crm_core_dev->crm_lock);
