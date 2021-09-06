@@ -661,6 +661,7 @@ struct cam_ife_csid_hw {
 	bool                             fatal_err_detected;
 	cam_hw_mgr_event_cb_func         event_cb;
 	uint32_t                         res_sof_cnt[CAM_IFE_PIX_PATH_RES_MAX];
+	bool                             is_rx_resetting;
 };
 
 int cam_ife_csid_hw_probe_init(struct cam_hw_intf  *csid_hw_intf,
