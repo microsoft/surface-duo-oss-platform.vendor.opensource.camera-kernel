@@ -36,6 +36,7 @@
 
 #define NUM_MASTERS 2
 #define NUM_QUEUES 2
+#define MAX_SENSORS 4
 
 #undef CDBG
 #ifdef CAM_SENSOR_DEBUG
@@ -129,6 +130,9 @@ struct cam_sensor_ctrl_t {
 	uint32_t last_flush_req;
 	uint16_t pipeline_delay;
 	struct cam_sensor_intr_t s_intr[AIS_MAX_INTR_GPIO];
+	bool no_lpm_mode_enabled;
 };
+
+extern struct cam_sensor_ctrl_t *cam_sensor_get_subdevdata(int sensor_dev_index);
 
 #endif /* _CAM_SENSOR_DEV_H_ */
