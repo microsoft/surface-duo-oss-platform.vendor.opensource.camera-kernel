@@ -13,6 +13,7 @@
 
 static struct v4l2_subdev *g_cci_subdev[MAX_CCI];
 static struct dentry *debugfs_root;
+static int debugfs_root_users = 0;	/* MSCHANGE */
 
 struct v4l2_subdev *cam_cci_get_subdev(int cci_dev_index)
 {
@@ -416,6 +417,7 @@ static int cam_cci_create_debugfs_entry(struct cci_device *cci_dev)
 			goto end;
 		}
 		debugfs_root = dbgfileptr;
+		debugfs_root_users++;	/* MSCHANGE */
 	}
 
 	if (cci_dev->soc_info.index == 0) {
@@ -541,13 +543,12 @@ static void cam_cci_component_unbind(struct device *dev,
 {
 	int rc = 0;
 	struct platform_device *pdev = to_platform_device(dev);
-
 	struct v4l2_subdev *subdev = platform_get_drvdata(pdev);
-	struct cci_device *cci_dev =
-		v4l2_get_subdevdata(subdev);
+	struct cci_device *cci_dev = v4l2_get_subdevdata(subdev);
 
 	cam_cpas_unregister_client(cci_dev->cpas_handle);
-	debugfs_remove_recursive(debugfs_root);
+	if (debugfs_root_users-- == 0)	/* MSCHANGE */
+		debugfs_remove_recursive(debugfs_root);
 	cam_cci_soc_remove(pdev, cci_dev);
 	rc = cam_unregister_subdev(&(cci_dev->v4l2_dev_str));
 	if (rc < 0)
