@@ -3946,13 +3946,13 @@ int cam_vfe_bus_ver3_init(
 
 deinit_vfe_out:
 	if (i < 0)
-		i = CAM_VFE_BUS_VER3_VFE_OUT_MAX;
+		i = bus_priv->num_out;
 	for (--i; i >= 0; i--)
 		cam_vfe_bus_ver3_deinit_vfe_out_resource(&bus_priv->vfe_out[i]);
 
 deinit_comp_grp:
 	if (i < 0)
-		i = bus_priv->num_comp_grp;
+		i = bus_priv->num_comp_grp;	/* MSCHANGE */
 	for (--i; i >= 0; i--)
 		cam_vfe_bus_ver3_deinit_comp_grp(&bus_priv->comp_grp[i]);
 
@@ -4000,7 +4000,7 @@ int cam_vfe_bus_ver3_deinit(
 	bus_priv->common_data.hw_init = false;
 	spin_unlock_irqrestore(&bus_priv->common_data.spin_lock, flags);
 
-	for (i = 0; i < CAM_VFE_BUS_VER3_COMP_GRP_MAX; i++) {
+	for (i = 0; i < bus_priv->num_comp_grp; i++) {	/* MSCHANGE */
 		rc = cam_vfe_bus_ver3_deinit_comp_grp(&bus_priv->comp_grp[i]);
 		if (rc < 0)
 			CAM_ERR(CAM_ISP,
@@ -4008,7 +4008,7 @@ int cam_vfe_bus_ver3_deinit(
 				bus_priv->common_data.core_index, i, rc);
 	}
 
-	for (i = 0; i < CAM_VFE_BUS_VER3_VFE_OUT_MAX; i++) {
+	for (i = 0; i < bus_priv->num_out; i++) {	/* MSCHANGE */
 		rc = cam_vfe_bus_ver3_deinit_vfe_out_resource(
 			&bus_priv->vfe_out[i]);
 		if (rc < 0)
